@@ -1,0 +1,67 @@
+/* Modern UI for Expense MVP frontend */
+* { box-sizing: border-box; }
+:root{
+	--bg: #0f172a;
+	--panel: #0b1220;
+	--muted: #94a3b8;
+	--accent: #06b6d4;
+	--glass: rgba(255,255,255,0.04);
+	--card: #0b1220;
+	--surface: #0f172a;
+}
+html,body{height:100%}
+body{
+	margin:0;
+	font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial;
+	background: linear-gradient(180deg,#071025 0%, #07172a 50%);
+	color:#e6eef6;
+	-webkit-font-smoothing:antialiased;
+}
+#app{
+	max-width:1100px;
+	margin:28px auto;
+	padding:20px;
+}
+header{
+	display:flex;
+	align-items:center;
+	margin-bottom:18px;
+}
+.brand{display:flex;gap:12px;align-items:center}
+.logo{width:52px;height:52px;border-radius:12px;background:linear-gradient(135deg,#06b6d4,#0ea5a4);display:flex;align-items:center;justify-content:center;font-size:24px}
+.brand-text h1{margin:0;font-weight:700;font-size:20px}
+.tag{font-size:12px;color:var(--muted);margin-top:4px}
+
+main{display:grid;grid-template-columns:1fr 380px;gap:20px;align-items:start}
+
+/* Chat panel */
+#chat{background:linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01));padding:18px;border-radius:14px;box-shadow:0 8px 30px rgba(2,6,23,0.6)}
+#messages{height:520px;overflow:auto;padding:12px;border-radius:8px;background:linear-gradient(180deg, rgba(255,255,255,0.01), rgba(255,255,255,0.00));display:flex;flex-direction:column;gap:12px}
+.msg{max-width:78%;display:inline-block;padding:10px 14px;border-radius:12px}
+.msg.user{align-self:flex-end;background:linear-gradient(90deg,#036666,#0486a7);color:white;border-bottom-right-radius:4px}
+.msg.assistant{align-self:flex-start;background:rgba(255,255,255,0.06);color:var(--muted);border-bottom-left-radius:4px}
+.msg.system{align-self:center;background:transparent;color:var(--muted);font-size:13px}
+.msg .msg-text{white-space:pre-wrap}
+
+/* Composer */
+#composer{margin-top:12px;padding:12px;background:rgba(255,255,255,0.02);border-radius:10px;display:flex;flex-direction:column;gap:12px}
+#composer textarea{width:100%;min-height:96px;max-height:140px;padding:12px;border-radius:10px;border:1px solid rgba(255,255,255,0.04);background:transparent;color:inherit;resize:vertical}
+.controls{display:flex;align-items:center;gap:10px}
+.checkbox{display:flex;align-items:center;gap:8px;color:var(--muted)}
+.checkbox input{width:16px;height:16px}
+button{background:linear-gradient(90deg,var(--accent),#0891b2);border:0;color:#021224;padding:10px 14px;border-radius:10px;font-weight:600;cursor:pointer}
+button#new-context{background:transparent;border:1px solid rgba(255,255,255,0.04);color:var(--muted)}
+
+/* Sidebar */
+#composer + .spacer{height:1px}
+#sidebar{background:linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01));padding:18px;border-radius:14px;box-shadow:0 8px 30px rgba(2,6,23,0.6)}
+#sidebar h3{margin-top:0;margin-bottom:8px}
+.expense-item{display:flex;justify-content:space-between;align-items:center;padding:10px;border-radius:8px;background:rgba(255,255,255,0.02);margin-bottom:10px}
+.expense-item .meta{color:var(--muted);font-size:13px}
+
+footer{margin-top:18px;color:var(--muted);text-align:center;font-size:13px}
+
+@media (max-width:900px){
+	main{grid-template-columns:1fr;}
+	#messages{height:420px}
+}

@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Expense MVP — LLM Chat</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <div id="app">
+    <header>
+      <div class="brand">
+        <div class="logo">💸</div>
+        <div class="brand-text">
+          <h1>Expense MVP</h1>
+          <div class="tag">Talk to the LLM to categorize & store expenses</div>
+        </div>
+      </div>
+    </header>
+
+    <main>
+      <section id="chat">
+        <div id="messages" aria-live="polite"></div>
+
+        <div id="composer">
+          <textarea id="prompt" placeholder="Type a prompt for the assistant..."></textarea>
+          <div class="controls">
+            <label class="checkbox">
+              <input type="checkbox" id="analyze" />
+              <span>Analyze & store expense</span>
+            </label>
+            <button id="send">Send</button>
+            <button id="new-context">New Context</button>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer>
+      <small>Talks to the MCP endpoints: create context and send messages (askLLM)</small>
+    </footer>
+  </div>
+
+  <script src="/app.js" type="module"></script>
+  </script>
+</body>
+</html>
