@@ -29,15 +29,15 @@ export function createServer() {
     if (!msg) return res.status(404).json({ error: 'context not found' });
 
     if (askLLM) {
-      // Always try to analyze and store as an expense first
       try {
-        const result = await mcp.analyzeAndStoreExpense(content || '');
+        const result = await mcp.handleConversationTurn(contextId, content || '');
         mcp.addMessage(contextId, 'assistant', result.assistantText || '');
         return res.json({ 
           message: msg, 
           assistant: result.assistantText, 
           stored: result.stored,
-          storeCount: result.stored.length 
+          storeCount: result.storeCount,
+          detectedExpense: result.detectedExpense,
         });
       } catch (err: any) {
         const e = String(err);

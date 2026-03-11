@@ -17,7 +17,19 @@ async function ensureDB() {
 async function readAll(): Promise<Expense[]> {
   await ensureDB();
   const raw = await fs.readFile(DB_PATH, 'utf-8');
-  return JSON.parse(raw) as Expense[];
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    await writeAll([]);
+    return [];
+  }
+
+  try {
+    return JSON.parse(trimmed) as Expense[];
+  } catch (err) {
+    console.warn('[DB] Invalid expenses.json contents, resetting store');
+    await writeAll([]);
+    return [];
+  }
 }
 
 async function writeAll(list: Expense[]) {

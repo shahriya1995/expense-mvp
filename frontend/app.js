@@ -21,7 +21,7 @@ function makeClient(els) {
   function setLoading(state) {
     if (SEND_BTN) SEND_BTN.disabled = state;
     if (PROMPT_EL) PROMPT_EL.disabled = state;
-    if (SEND_BTN) SEND_BTN.textContent = state ? 'Sending…' : 'Send';
+    if (SEND_BTN) SEND_BTN.textContent = state ? 'Entering…' : 'Enter';
   }
 
   async function createContext(title = 'frontend-context') {
@@ -33,7 +33,6 @@ function makeClient(els) {
     if (!res.ok) throw new Error('Failed to create context');
     const ctx = await res.json();
     contextId = ctx.id;
-    appendMessage('system', `New context created: ${contextId}`);
     return ctx;
   }
 
@@ -61,7 +60,7 @@ function makeClient(els) {
       });
       if (!res.ok) {
         const payload = await res.json().catch(() => ({}));
-        appendMessage('system', `Error: ${payload.error || res.statusText}`);
+        appendMessage('system', `I hit an error: ${payload.error || res.statusText}`);
         return;
       }
       const payload = await res.json().catch(() => ({}));
@@ -77,9 +76,10 @@ function makeClient(els) {
         else appendMessage('system', 'No assistant reply (empty payload)');
       }
     } catch (err) {
-      appendMessage('system', 'Request failed: ' + String(err));
+      appendMessage('system', 'I could not send that message. ' + String(err));
     } finally {
       setLoading(false);
+      PROMPT_EL?.focus();
     }
   }
 
@@ -91,7 +91,7 @@ function makeClient(els) {
   if (SEND_BTN) SEND_BTN.addEventListener('click', sendPrompt);
   if (PROMPT_EL) {
     PROMPT_EL.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+      if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
         sendPrompt();
       }
@@ -101,8 +101,9 @@ function makeClient(els) {
     try {
       await createContext('user-created');
       clearMessages();
+      appendMessage('assistant', 'Fresh start. Tell me about an expense, or we can just chat.');
     } catch (err) {
-      appendMessage('system', 'Could not create context: ' + String(err));
+      appendMessage('system', 'I could not start a new chat. ' + String(err));
     }
   });
 
@@ -110,8 +111,9 @@ function makeClient(els) {
   (async () => {
     try {
       await createContext('initial');
+      appendMessage('assistant', 'Hi. Tell me what you spent, or ask me anything about your expenses.');
     } catch (err) {
-      appendMessage('system', 'Could not create initial context: ' + String(err));
+      appendMessage('system', 'I could not start the chat. ' + String(err));
     }
   })();
 

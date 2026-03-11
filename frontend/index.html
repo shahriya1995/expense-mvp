@@ -16,7 +16,7 @@
         <div class="logo">💸</div>
         <div class="brand-text">
           <h1>Expense MVP</h1>
-          <div class="tag">Talk to the LLM to categorize & store expenses</div>
+          <div class="tag">Chat naturally. Expenses are detected and logged from your message.</div>
         </div>
       </div>
     </header>
@@ -26,13 +26,8 @@
         <div id="messages" aria-live="polite"></div>
 
         <div id="composer">
-          <textarea id="prompt" placeholder="Type a prompt for the assistant..."></textarea>
+          <textarea id="prompt" placeholder="Try “I spent $14 on lunch” or just say hi..."></textarea>
           <div class="controls">
-            <label class="checkbox">
-              <input type="checkbox" id="analyze" />
-              <span>Analyze & store expense</span>
-            </label>
-            <button id="send">Send</button>
             <button id="new-context">New Context</button>
           </div>
         </div>
@@ -40,7 +35,7 @@
     </main>
 
     <footer>
-      <small>Talks to the MCP endpoints: create context and send messages (askLLM)</small>
+      <small>Use everyday language. The assistant will reply normally and log clear expenses automatically.</small>
     </footer>
   </div>
 

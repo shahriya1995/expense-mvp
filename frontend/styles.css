@@ -47,8 +47,6 @@ main{display:grid;grid-template-columns:1fr 380px;gap:20px;align-items:start}
 #composer{margin-top:12px;padding:12px;background:rgba(255,255,255,0.02);border-radius:10px;display:flex;flex-direction:column;gap:12px}
 #composer textarea{width:100%;min-height:96px;max-height:140px;padding:12px;border-radius:10px;border:1px solid rgba(255,255,255,0.04);background:transparent;color:inherit;resize:vertical}
 .controls{display:flex;align-items:center;gap:10px}
-.checkbox{display:flex;align-items:center;gap:8px;color:var(--muted)}
-.checkbox input{width:16px;height:16px}
 button{background:linear-gradient(90deg,var(--accent),#0891b2);border:0;color:#021224;padding:10px 14px;border-radius:10px;font-weight:600;cursor:pointer}
 button#new-context{background:transparent;border:1px solid rgba(255,255,255,0.04);color:var(--muted)}
 
