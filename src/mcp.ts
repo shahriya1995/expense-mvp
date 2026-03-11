@@ -1,15 +1,19 @@
 /**
- * MCP (Model Context Protocol) wired to Google Gemini (Generative Language API).
+ * MCP (Model Context Protocol) with dual LLM support:
+ * - Google Gemini (API-based)
+ * - Ollama (Local, running in Docker)
  *
  * Requirements:
- * - Set GEMINI_API_KEY in .env or environment
- * - Optional: set GEMINI_MODEL (default: gemini-3-flash-preview)
+ * - For Gemini: Set GEMINI_API_KEY in .env
+ * - For Ollama: Run Docker: docker run -d -p 11434:11434 ollama/ollama
+ * - Set LLM_PROVIDER in .env (gemini or ollama)
  * - Node 18+ (global fetch)
  */
 
 import { v4 as uuidv4 } from 'uuid';
 import { createExpense } from './db';
 import { Expense } from './types';
+import { callOllama, checkOllamaHealth, getOllamaModels } from './ollama';
 
 export type Role = 'user' | 'assistant' | 'system';
 
@@ -125,8 +129,14 @@ function extractAssistantText(data: any): string | null {
 function extractJsonFromText(text: string): any | null {
   if (!text) return null;
 
-  const firstBrace = text.indexOf('{');
-  const firstBracket = text.indexOf('[');
+  // Strip markdown code blocks if present (Ollama sometimes wraps JSON in ```json...```)
+  let cleaned = text
+    .replace(/^```(?:json)?\s*/gm, '')
+    .replace(/```\s*$/gm, '')
+    .trim();
+
+  const firstBrace = cleaned.indexOf('{');
+  const firstBracket = cleaned.indexOf('[');
 
   let start = -1;
   if (firstBrace === -1 && firstBracket === -1) return null;
@@ -134,7 +144,7 @@ function extractJsonFromText(text: string): any | null {
   else if (firstBracket === -1) start = firstBrace;
   else start = Math.min(firstBrace, firstBracket);
 
-  const candidate = text.slice(start);
+  const candidate = cleaned.slice(start);
 
   for (let end = candidate.length; end > 0; end--) {
     const sub = candidate.slice(0, end);
@@ -235,22 +245,54 @@ async function callGemini(opts: {
 }
 
 /**
+ * Unified LLM caller - routes to Gemini or Ollama based on LLM_PROVIDER env var.
+ */
+async function callLLM(opts: {
+  userText: string;
+  systemInstruction?: string;
+  temperature?: number;
+  maxOutputTokens?: number;
+}): Promise<string> {
+  const provider = (process.env.LLM_PROVIDER || 'gemini').toLowerCase();
+
+  if (provider === 'ollama') {
+    try {
+      const isHealthy = await checkOllamaHealth();
+      if (!isHealthy) {
+        throw new Error('Ollama is not running. Start it with: docker run -d -p 11434:11434 ollama/ollama');
+      }
+      return await callOllama(opts);
+    } catch (err: any) {
+      console.error('[LLM] Ollama call failed:', String(err?.message || err));
+      throw err;
+    }
+  } else if (provider === 'gemini') {
+    const data = await callGemini({
+      userText: opts.userText,
+      systemInstruction: opts.systemInstruction,
+      temperature: opts.temperature,
+      maxOutputTokens: opts.maxOutputTokens,
+    });
+    const text = extractAssistantText(data);
+    if (text) return text;
+    return `Gemini response: ${JSON.stringify(data).slice(0, 500)}`;
+  } else {
+    throw new Error(`Unknown LLM_PROVIDER: ${provider}. Use 'gemini' or 'ollama'.`);
+  }
+}
+
+/**
  * Simple text generation.
  */
 export async function handleLLMRequest(prompt: string): Promise<string> {
   try {
-    const data = await callGemini({
+    return await callLLM({
       userText: prompt,
       temperature: 0.7,
       maxOutputTokens: 512,
     });
-
-    const text = extractAssistantText(data);
-    if (text) return text;
-
-    return `Gemini response parsing fallback: ${JSON.stringify(data).slice(0, 1000)}`;
   } catch (err: any) {
-    return `Gemini request failed: ${String(err?.message || err)}`;
+    return `LLM request failed: ${String(err?.message || err)}`;
   }
 }
 
@@ -260,31 +302,38 @@ export async function handleLLMRequest(prompt: string): Promise<string> {
  */
 export async function analyzeAndStoreExpense(freeText: string): Promise<{ stored: Expense[]; assistantText: string }> {
   const systemInstr =
-    `Extract expense information from this text. Return ONLY a valid JSON object with an "expenses" array. ` +
+    `Extract expense information from this text. Return ONLY valid JSON (no markdown, no code blocks, no explanation). ` +
+    `The JSON must be a valid object with an "expenses" array containing expense objects. ` +
     `Each expense must have: description (string), amount (number in dollars), currency (string, default USD), ` +
     `date (ISO string, default today), category (string, optional), notes (string, optional). ` +
-    `Example response: {"expenses":[{"description":"coffee","amount":5,"currency":"USD","date":"2026-03-11","category":"Food"}]}`;
+    `Example: {"expenses":[{"description":"coffee","amount":5,"currency":"USD","date":"2026-03-11","category":"Food"}]} ` +
+    `IMPORTANT: Return only the JSON object, nothing else. No markdown code blocks.`;
 
   let assistantText = '';
   
   try {
-    const data = await callGemini({
+    assistantText = await callLLM({
       userText: `${systemInstr}\n\nText to analyze: "${freeText}"`,
       temperature: 0,
       maxOutputTokens: 512,
     });
-
-    assistantText = extractAssistantText(data) ?? JSON.stringify(data);
   } catch (err: any) {
-    console.error('[EXPENSE_ANALYZE] Gemini call failed:', String(err?.message || err));
+    console.error('[EXPENSE_ANALYZE] LLM call failed:', String(err?.message || err));
     assistantText = `Failed to analyze expense: ${String(err?.message || err)}`;
   }
 
   let parsed: any = null;
   try {
     parsed = JSON.parse(assistantText);
+    console.debug('[EXPENSE_ANALYZE] Direct JSON parse succeeded');
   } catch {
+    console.debug('[EXPENSE_ANALYZE] Direct JSON parse failed, trying extraction...');
     parsed = extractJsonFromText(assistantText);
+    if (parsed) {
+      console.debug('[EXPENSE_ANALYZE] JSON extraction succeeded');
+    } else {
+      console.warn('[EXPENSE_ANALYZE] Could not extract JSON. Raw response:', assistantText.slice(0, 200));
+    }
   }
 
   const toStore: Expense[] = [];
