@@ -29,19 +29,9 @@ export interface Context {
   title?: string;
   messages: Message[];
   createdAt: string;
-  pendingExpense?: PendingExpense;
 }
 
-interface PendingExpense {
-  originalText: string;
-  expense: Omit<Expense, 'id'>;
-  question: string;
-}
-
-type ConversationAction = 'small_talk' | 'add_expense' | 'clarify_expense';
-
-interface ConversationPlan {
-  action: ConversationAction;
+interface ConversationInterpretation {
   reply: string;
   expenses: Array<Partial<Omit<Expense, 'id'>>>;
 }
@@ -78,16 +68,6 @@ function getRecentConversation(contextId: string, limit = 8): Message[] {
   const c = contexts.get(contextId);
   if (!c) return [];
   return c.messages.slice(-limit);
-}
-
-function getPendingExpense(contextId: string): PendingExpense | undefined {
-  return contexts.get(contextId)?.pendingExpense;
-}
-
-function setPendingExpense(contextId: string, pending?: PendingExpense) {
-  const c = contexts.get(contextId);
-  if (!c) return;
-  c.pendingExpense = pending;
 }
 
 function getFetch(): typeof fetch {
@@ -332,42 +312,6 @@ export async function handleLLMRequest(prompt: string): Promise<string> {
   }
 }
 
-function formatAmount(cents: number, currency = 'USD'): string {
-  try {
-    return new Intl.NumberFormat('en-US', {
-      style: 'currency',
-      currency,
-    }).format(cents / 100);
-  } catch {
-    return `$${(cents / 100).toFixed(2)}`;
-  }
-}
-
-function buildExpenseSummary(expense: Expense): string {
-  const parts = [
-    `${expense.description} for ${formatAmount(expense.amount, expense.currency || 'USD')}`,
-  ];
-
-  if (expense.category) {
-    parts.push(`category: ${expense.category}`);
-  }
-
-  return parts.join(' ');
-}
-
-function buildExpenseReply(stored: Expense[], freeText: string): string {
-  if (stored.length === 0) {
-    return `I looked at "${freeText}", but I couldn't find a clear amount to save. Try something like "I spent $18 on lunch" or "Coffee was 4.50".`;
-  }
-
-  if (stored.length === 1) {
-    return `Logged ${buildExpenseSummary(stored[0])}.`;
-  }
-
-  const summary = stored.map(buildExpenseSummary).join('; ');
-  return `Logged ${stored.length} expenses: ${summary}.`;
-}
-
 export async function generateFriendlyReply(
   contextId: string,
   userText: string
@@ -428,66 +372,65 @@ function normalizePlannedExpenses(
   return normalized;
 }
 
-async function planConversationTurn(
+async function interpretConversationTurn(
   contextId: string,
   userText: string
-): Promise<ConversationPlan> {
-  const pending = getPendingExpense(contextId);
+): Promise<ConversationInterpretation> {
   const recent = getRecentConversation(contextId)
     .map((msg) => `${msg.role}: ${msg.content}`)
     .join('\n');
 
-  const pendingBlock = pending
-    ? `Pending expense awaiting confirmation:
-${JSON.stringify(pending.expense)}
-Question asked: ${pending.question}
-`
-    : 'No pending expense.\n';
-
   const systemInstruction =
-    `You are an intent router for an expense tracking chat. ` +
-    `Your job is to classify the latest user message and return ONLY valid JSON. ` +
+    `You are an expense assistant. Interpret the latest user message using the conversation history and return ONLY valid JSON. ` +
     `Never answer with prose outside JSON. Never use markdown. ` +
-    `Allowed actions are exactly: "small_talk", "add_expense", "clarify_expense". ` +
-    `Choose "small_talk" for greetings, casual chat, questions, thanks, and general conversation. ` +
-    `Choose "add_expense" when the user clearly describes one or more expenses that should be saved now. ` +
-    `Choose "clarify_expense" when the user likely means an expense but some part is ambiguous or needs confirmation. ` +
-    `Use semantic understanding, not just explicit phrases. Short informal messages may still refer to expenses. ` +
-    `When action is "clarify_expense", include your best structured guess in expenses[0] whenever you can infer one. ` +
-    `If there is a pending expense and the user confirms it, choose "add_expense" and include the confirmed expense in expenses. ` +
-    `If there is a pending expense and the user corrects it, choose "add_expense" when the corrected expense is clear, otherwise choose "clarify_expense". ` +
-    `If action is "add_expense", expenses must contain one or more objects with description and amount in dollars. ` +
-    `If action is "clarify_expense", expenses should usually contain exactly one best-guess expense object. ` +
-    `If action is "small_talk", expenses must be an empty array. ` +
+    `If the message is casual conversation, questions, thanks, or anything that should not be saved, reply normally and return an empty expenses array. ` +
+    `If the message clearly describes one or more expenses that should be saved now, reply naturally and include those expenses. ` +
+    `If the message might refer to an expense but is ambiguous, ask a follow-up question in reply and return an empty expenses array. ` +
+    `Keep asking follow-up questions until you know enough to save a real expense confidently. ` +
+    `Do not include any expense object unless the amount and what was spent are clear enough to store. ` +
+    `If you are still unsure, return expenses as an empty array. ` +
+    `Use the conversation history to understand natural follow-up replies, confirmations, corrections, and extra details. ` +
+    `Do not require the user to answer in any fixed format. Infer meaning from normal language. ` +
+    `If the assistant previously asked a clarification question, include expenses only when the follow-up makes the expense clear enough to save. ` +
+    `Each expense must have a description and amount in dollars. ` +
     `The reply should be friendly and concise. ` +
     `Examples:
 User: "hi"
-Output: {"action":"small_talk","reply":"Hi. What would you like to do?","expenses":[]}
+Output: {"reply":"Hi. What can I help you with today?","expenses":[]}
 
 User: "I spent $12 on lunch"
-Output: {"action":"add_expense","reply":"Logged lunch for $12.","expenses":[{"description":"lunch","amount":12,"currency":"USD","category":"Food"}]}
+Output: {"reply":"Got it, I added $12 for lunch.","expenses":[{"description":"lunch","amount":12,"currency":"USD","category":"Food"}]}
 
 User: "20$ shoes, 10$ socks, 50$ food"
-Output: {"action":"add_expense","reply":"Logged 3 expenses.","expenses":[{"description":"shoes","amount":20,"currency":"USD","category":"Shopping"},{"description":"socks","amount":10,"currency":"USD","category":"Shopping"},{"description":"food","amount":50,"currency":"USD","category":"Food"}]}
+Output: {"reply":"Done, I added shoes for $20, socks for $10, and food for $50.","expenses":[{"description":"shoes","amount":20,"currency":"USD","category":"Shopping"},{"description":"socks","amount":10,"currency":"USD","category":"Shopping"},{"description":"food","amount":50,"currency":"USD","category":"Food"}]}
 
 User: "20 socks"
-Output: {"action":"clarify_expense","reply":"Do you mean $20 for socks?","expenses":[{"description":"socks","amount":20,"currency":"USD"}]}
+Output: {"reply":"Do you mean $20 for socks?","expenses":[]}
 
 User: "i bought 100 of carpet"
-Output: {"action":"clarify_expense","reply":"Do you mean $100 for carpet?","expenses":[{"description":"carpet","amount":100,"currency":"USD","category":"Home"}]}
+Output: {"reply":"Do you mean $100 for carpet?","expenses":[]}
 
-User with pending expense asked "Do you mean $100 for carpet?" then replies "yes"
-Output: {"action":"add_expense","reply":"Logged carpet for $100.","expenses":[{"description":"carpet","amount":100,"currency":"USD","category":"Home"}]}
+Conversation:
+assistant: "Do you mean $100 for carpet?"
+user: "yeah that's right"
+Output: {"reply":"Okay, I added carpet for $100.","expenses":[{"description":"carpet","amount":100,"currency":"USD","category":"Home"}]}
+
+Conversation:
+assistant: "Do you mean $20 for socks?"
+user: "not 20, it was closer to 18"
+Output: {"reply":"Thanks, I updated it to $18 for socks.","expenses":[{"description":"socks","amount":18,"currency":"USD","category":"Shopping"}]}
+
+Conversation:
+assistant: "What amount should I save for the socks?"
+user: "it was from Nike"
+Output: {"reply":"How much did you spend at Nike?","expenses":[]}
 
 Return JSON in this exact shape:
-{"action":"small_talk|add_expense|clarify_expense","reply":"string","expenses":[{"description":"string","amount":12.34,"currency":"USD","date":"optional ISO string","category":"optional string","notes":"optional string"}]}.`;
+{"reply":"string","expenses":[{"description":"string","amount":12.34,"currency":"USD","date":"optional ISO string","category":"optional string","notes":"optional string"}]}.`;
 
   try {
     const raw = await callLLM({
-      userText:
-        `Conversation so far:\n${recent || '(empty)'}\n\n` +
-        `${pendingBlock}\n` +
-        `Latest user message:\n${userText}`,
+      userText: `Conversation so far:\n${recent || '(empty)'}\n\nLatest user message:\n${userText}`,
       systemInstruction,
       temperature: 0,
       maxOutputTokens: 300,
@@ -498,29 +441,18 @@ Return JSON in this exact shape:
     if (
       parsed &&
       typeof parsed === 'object' &&
-      typeof parsed.action === 'string' &&
       typeof parsed.reply === 'string'
     ) {
-      const action = parsed.action as ConversationAction;
-
-      if (
-        action === 'small_talk' ||
-        action === 'add_expense' ||
-        action === 'clarify_expense'
-      ) {
-        return {
-          action,
-          reply: parsed.reply,
-          expenses: Array.isArray(parsed.expenses) ? parsed.expenses : [],
-        };
-      }
+      return {
+        reply: parsed.reply,
+        expenses: Array.isArray(parsed.expenses) ? parsed.expenses : [],
+      };
     }
   } catch (err: any) {
-    console.error('[CHAT_PLAN] Planning failed:', String(err?.message || err));
+    console.error('[CHAT_INTERPRET] Interpretation failed:', String(err?.message || err));
   }
 
   return {
-    action: 'small_talk',
     reply: await generateFriendlyReply(contextId, userText),
     expenses: [],
   };
@@ -548,61 +480,6 @@ async function storeParsedExpenses(entries: Omit<Expense, 'id'>[]): Promise<Expe
   return stored;
 }
 
-async function handlePendingExpenseReply(
-  contextId: string,
-  userText: string
-): Promise<{
-  assistantText: string;
-  stored: Expense[];
-  storeCount: number;
-  detectedExpense: boolean;
-} | null> {
-  const pending = getPendingExpense(contextId);
-  if (!pending) return null;
-
-  const plan = await planConversationTurn(contextId, userText);
-  const plannedExpenses = normalizePlannedExpenses(plan.expenses);
-
-  if (plan.action === 'add_expense') {
-    const expensesToStore = plannedExpenses.length > 0 ? plannedExpenses : [pending.expense];
-    const stored = await storeParsedExpenses(expensesToStore);
-    setPendingExpense(contextId, undefined);
-
-    return {
-      assistantText: plan.reply || buildExpenseReply(stored, pending.originalText),
-      stored,
-      storeCount: stored.length,
-      detectedExpense: true,
-    };
-  }
-
-  if (plan.action === 'clarify_expense') {
-    const nextExpense = plannedExpenses[0] || pending.expense;
-    const question = plan.reply || pending.question;
-
-    setPendingExpense(contextId, {
-      originalText: pending.originalText,
-      expense: nextExpense,
-      question,
-    });
-
-    return {
-      assistantText: question,
-      stored: [],
-      storeCount: 0,
-      detectedExpense: false,
-    };
-  }
-
-  setPendingExpense(contextId, undefined);
-  return {
-    assistantText: plan.reply,
-    stored: [],
-    storeCount: 0,
-    detectedExpense: false,
-  };
-}
-
 export async function handleConversationTurn(
   contextId: string,
   userText: string
@@ -612,54 +489,12 @@ export async function handleConversationTurn(
   storeCount: number;
   detectedExpense: boolean;
 }> {
-  const pendingResult = await handlePendingExpenseReply(contextId, userText);
-  if (pendingResult) return pendingResult;
-
-  const plan = await planConversationTurn(contextId, userText);
-  const plannedExpenses = normalizePlannedExpenses(plan.expenses);
-
-  if (plan.action === 'small_talk') {
-    return {
-      assistantText: plan.reply,
-      stored: [],
-      storeCount: 0,
-      detectedExpense: false,
-    };
-  }
-
-  if (plan.action === 'clarify_expense') {
-    const firstExpense = plannedExpenses[0];
-
-    if (!firstExpense) {
-      const assistantText = plan.reply || `Could you clarify that expense a little more?`;
-      return {
-        assistantText,
-        stored: [],
-        storeCount: 0,
-        detectedExpense: false,
-      };
-    }
-
-    const question = plan.reply || `Could you confirm the expense details?`;
-
-    setPendingExpense(contextId, {
-      originalText: userText,
-      expense: firstExpense,
-      question,
-    });
-
-    return {
-      assistantText: question,
-      stored: [],
-      storeCount: 0,
-      detectedExpense: false,
-    };
-  }
+  const interpretation = await interpretConversationTurn(contextId, userText);
+  const plannedExpenses = normalizePlannedExpenses(interpretation.expenses);
 
   if (plannedExpenses.length === 0) {
-    const assistantText = plan.reply || `I couldn't extract a valid expense to save from that.`;
     return {
-      assistantText,
+      assistantText: interpretation.reply || `Could you say a little more about that?`,
       stored: [],
       storeCount: 0,
       detectedExpense: false,
@@ -667,10 +502,9 @@ export async function handleConversationTurn(
   }
 
   const stored = await storeParsedExpenses(plannedExpenses);
-  const replyText = plan.reply || buildExpenseReply(stored, userText);
 
   return {
-    assistantText: replyText,
+    assistantText: interpretation.reply,
     stored,
     storeCount: stored.length,
     detectedExpense: true,

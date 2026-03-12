@@ -32,7 +32,7 @@ function getOllamaModel(): string {
 
 /**
  * Call Ollama API for text generation.
- * Uses the standard Ollama generate endpoint.
+ * Uses the Ollama chat endpoint.
  */
 export async function callOllama(opts: {
   userText: string;
@@ -44,20 +44,22 @@ export async function callOllama(opts: {
   const model = getOllamaModel();
   const _fetch = getFetch();
 
-  const url = `${baseUrl}/api/generate`;
+  const url = `${baseUrl}/api/chat`;
 
-  // Build prompt with system instruction if provided
-  let prompt = opts.userText;
+  const messages: Array<{ role: 'system' | 'user'; content: string }> = [];
   if (opts.systemInstruction) {
-    prompt = `${opts.systemInstruction}\n\n${opts.userText}`;
+    messages.push({ role: 'system', content: opts.systemInstruction });
   }
+  messages.push({ role: 'user', content: opts.userText });
 
   const body = {
     model,
-    prompt,
+    messages,
     stream: false,
-    temperature: opts.temperature ?? 0.7,
-    num_predict: opts.maxOutputTokens ?? 512,
+    options: {
+      temperature: opts.temperature ?? 0.7,
+      num_predict: opts.maxOutputTokens ?? 512,
+    },
   };
 
   try {
@@ -75,7 +77,7 @@ export async function callOllama(opts: {
     }
 
     const data = await res.json();
-    return data.response || '';
+    return data.message?.content || '';
   } catch (err: any) {
     throw new Error(`Ollama request failed: ${String(err?.message || err)}`);
   }
