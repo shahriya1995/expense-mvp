@@ -1,58 +1,65 @@
 # Expense MVP
 
-A small expense tracker with:
-
-- a chat-first frontend
-- MCP-style conversation context
-- LLM-based routing between small talk, expense logging, and clarification
-- JSON file persistence in [data/expenses.json](/Users/riyaphade/Projects/expense_tracker/expense-mvp/data/expenses.json)
+A chat-first expense tracker built with Node.js, TypeScript, and Express. The app keeps a lightweight conversation context, lets an LLM choose internal tools, stores expenses in a JSON file, and renders both chat replies and structured data results in the UI.
 
 ## What It Does
 
-You open the app, type naturally into the chat box, and the assistant decides whether to:
+You type naturally in the chat UI. The assistant can:
 
-- respond as normal chat
-- log one or more expenses
-- ask a follow-up question when the message is ambiguous
+- add an expense
+- update an expense
+- delete an expense
+- list stored expenses
+- summarize the current month
+- ask a short follow-up question when a request is unclear
 
 Examples:
 
-- `hi`
 - `I spent $12 on lunch`
-- `20$ shoes, 10$ socks, 50$ food`
-- `I bought 100 of carpet`
+- `show me my last 3 expenses`
+- `how much did I spend this month?`
+- `delete office expenses`
+- `update my lunch expense to $15`
 
-If the expense is unclear, the assistant can keep a pending clarification in the chat context and use your next reply to decide whether to save it.
+## Architecture
 
-## Stack
+The app uses an internal MCP-style tool loop:
 
-- Node.js
-- TypeScript
-- Express
-- Zod
-- Ollama or Gemini for LLM calls
-- file-based persistence in `data/expenses.json`
+1. the frontend sends a chat message to `POST /mcp/:contextId/msg`
+2. [src/mcp.ts](/Users/riyaphade/Projects/expense_tracker/expense-mvp/src/mcp.ts) sends recent conversation plus any relevant tool context to the LLM
+3. the LLM returns JSON with:
+   - `reply`
+   - `tool_calls`
+4. the server executes those tool calls
+5. the LLM can be called again to produce a final natural-language reply grounded in the tool results
+6. the frontend renders:
+   - the assistant reply
+   - a structured result block for things like expense lists and monthly summaries
 
-## Current Default LLM
+## Tools
 
-The current `.env` is set to use Ollama with:
+Internal tools live in [src/tools/](./src/tools):
 
-- `LLM_PROVIDER=ollama`
-- `OLLAMA_MODEL=qwen2.5:3b`
+- [src/tools/createExpense.ts](/Users/riyaphade/Projects/expense_tracker/expense-mvp/src/tools/createExpense.ts)
+- [src/tools/updateExpense.ts](/Users/riyaphade/Projects/expense_tracker/expense-mvp/src/tools/updateExpense.ts)
+- [src/tools/deleteExpense.ts](/Users/riyaphade/Projects/expense_tracker/expense-mvp/src/tools/deleteExpense.ts)
+- [src/tools/listExpenses.ts](/Users/riyaphade/Projects/expense_tracker/expense-mvp/src/tools/listExpenses.ts)
+- [src/tools/monthlySummary.ts](/Users/riyaphade/Projects/expense_tracker/expense-mvp/src/tools/monthlySummary.ts)
 
-This model performed better than `orca-mini` for the current JSON-routing prompt.
+Important behavior:
 
-## Setup
+- `list_expenses` is capped at **4 expenses max**
+- the LLM is told not to ask `list_expenses` for more than 4
+- follow-up delete/update replies like `delete 2` use the previous tool result context
 
-1. Install dependencies
+## LLM Providers
 
-```bash
-npm install
-```
+The app supports:
 
-2. Make sure your `.env` contains valid values
+- Ollama
+- Gemini
 
-Example:
+Current `.env` example:
 
 ```env
 LLM_PROVIDER=ollama
@@ -66,14 +73,23 @@ OLLAMA_MODEL=qwen2.5:3b
 PORT=4000
 ```
 
-Note:
+Notes:
 
-- even when using `LLM_PROVIDER=ollama`, the current startup code in [src/index.ts](/Users/riyaphade/Projects/expense_tracker/expense-mvp/src/index.ts) still requires `GEMINI_API_KEY` to be present
-- if you want that removed, the startup validation should be adjusted
+- Ollama runs locally at `http://localhost:11434`
+- Gemini is called remotely through Google’s API
+- [src/index.ts](/Users/riyaphade/Projects/expense_tracker/expense-mvp/src/index.ts) only requires Gemini credentials when `LLM_PROVIDER=gemini`
 
-3. If using Ollama, make sure it is running locally
+## Setup
 
-Example:
+1. Install dependencies
+
+```bash
+npm install
+```
+
+2. Configure `.env`
+
+3. If using Ollama, start it
 
 ```bash
 ollama serve
@@ -91,36 +107,29 @@ ollama pull qwen2.5:3b
 npm run dev
 ```
 
-Then open:
+Open:
 
 ```text
 http://localhost:4000
 ```
 
-## UI Flow
+## Frontend
 
-The frontend lives in [frontend/](./frontend).
+Frontend files:
 
-When the page loads:
+- [frontend/index.html](/Users/riyaphade/Projects/expense_tracker/expense-mvp/frontend/index.html)
+- [frontend/app.js](/Users/riyaphade/Projects/expense_tracker/expense-mvp/frontend/app.js)
+- [frontend/styles.css](/Users/riyaphade/Projects/expense_tracker/expense-mvp/frontend/styles.css)
 
-- [frontend/app.js](/Users/riyaphade/Projects/expense_tracker/expense-mvp/frontend/app.js) creates a chat context with `POST /mcp/context`
-- the returned context id is stored in the browser session
-- the user types into the textarea and presses `Enter` to send
+Current UI behavior:
+
+- press `Enter` to send
 - `Shift+Enter` inserts a newline
-
-## Request Flow
-
-When you send a message:
-
-1. [frontend/app.js](/Users/riyaphade/Projects/expense_tracker/expense-mvp/frontend/app.js) sends `POST /mcp/:contextId/msg`
-2. [src/server.ts](/Users/riyaphade/Projects/expense_tracker/expense-mvp/src/server.ts) adds the user message to the in-memory context
-3. [src/mcp.ts](/Users/riyaphade/Projects/expense_tracker/expense-mvp/src/mcp.ts) runs `handleConversationTurn(...)`
-4. the LLM planner decides one action:
-   - `small_talk`
-   - `add_expense`
-   - `clarify_expense`
-5. if expenses are returned, they are stored through [src/db.ts](/Users/riyaphade/Projects/expense_tracker/expense-mvp/src/db.ts)
-6. the assistant reply is added back into the same context and returned to the frontend
+- the sidebar shows a current-month summary grouped by category
+- chat renders structured result blocks for:
+  - `list_expenses`
+  - `monthly_summary`
+- low-quality placeholder replies like blank `1. 2. 3.` lists are suppressed in the UI when real tool results are available
 
 ## Persistence
 
@@ -128,11 +137,14 @@ Expenses are stored in:
 
 - [data/expenses.json](/Users/riyaphade/Projects/expense_tracker/expense-mvp/data/expenses.json)
 
-The DB layer is in:
+The JSON DB layer is in:
 
 - [src/db.ts](/Users/riyaphade/Projects/expense_tracker/expense-mvp/src/db.ts)
 
-It automatically creates the file if missing and resets it to `[]` if the file is empty or invalid JSON.
+It:
+
+- creates the file if missing
+- resets the store to `[]` if the file is empty or invalid
 
 ## API
 
@@ -144,10 +156,27 @@ Expense REST API:
 - `PUT /api/expenses/:id`
 - `DELETE /api/expenses/:id`
 
-MCP chat endpoints:
+Chat endpoints:
 
 - `POST /mcp/context`
 - `POST /mcp/:contextId/msg`
+
+The chat response includes:
+
+- `assistant`
+- `stored`
+- `storeCount`
+- `detectedExpense`
+- `toolCalls`
+- `toolResults`
+
+## Main Files
+
+- [src/mcp.ts](/Users/riyaphade/Projects/expense_tracker/expense-mvp/src/mcp.ts): conversation loop, tool planning, reply generation, context memory
+- [src/server.ts](/Users/riyaphade/Projects/expense_tracker/expense-mvp/src/server.ts): Express routes
+- [src/db.ts](/Users/riyaphade/Projects/expense_tracker/expense-mvp/src/db.ts): JSON persistence
+- [src/tools/index.ts](/Users/riyaphade/Projects/expense_tracker/expense-mvp/src/tools/index.ts): tool registry
+- [frontend/app.js](/Users/riyaphade/Projects/expense_tracker/expense-mvp/frontend/app.js): browser client
 
 ## Scripts
 
@@ -160,9 +189,10 @@ npm test
 
 ## Tests
 
-There is currently a basic DB test in:
+Tests currently cover:
 
-- [tests/expenses.test.ts](/Users/riyaphade/Projects/expense_tracker/expense-mvp/tests/expenses.test.ts)
+- basic DB operations in [tests/expenses.test.ts](/Users/riyaphade/Projects/expense_tracker/expense-mvp/tests/expenses.test.ts)
+- tool registry operations in [tests/tools.test.ts](/Users/riyaphade/Projects/expense_tracker/expense-mvp/tests/tools.test.ts)
 
 Run:
 
@@ -170,17 +200,8 @@ Run:
 npm test -- --run
 ```
 
-## Current Behavior Notes
+## Current Limitations
 
-- the app is now LLM-driven for conversation routing
-- no local regex-based intent router is used for normal chat decisions
-- if the LLM is unavailable, chat behavior will degrade because routing depends on the model
-- `qwen2.5:3b` currently behaves better than `orca-mini` for this project
-
-## Main Files
-
-- [src/mcp.ts](/Users/riyaphade/Projects/expense_tracker/expense-mvp/src/mcp.ts): conversation logic, LLM routing, clarification flow
-- [src/server.ts](/Users/riyaphade/Projects/expense_tracker/expense-mvp/src/server.ts): Express server and endpoints
-- [src/db.ts](/Users/riyaphade/Projects/expense_tracker/expense-mvp/src/db.ts): JSON persistence
-- [frontend/app.js](/Users/riyaphade/Projects/expense_tracker/expense-mvp/frontend/app.js): browser chat client
-- [frontend/index.html](/Users/riyaphade/Projects/expense_tracker/expense-mvp/frontend/index.html): UI shell
+- LLM quality still affects how natural the final replies are
+- Ollama model latency can be much slower than Gemini for multi-step tool flows
+- there is still no dedicated automated test coverage for the full multi-turn conversation planner path in [src/mcp.ts](/Users/riyaphade/Projects/expense_tracker/expense-mvp/src/mcp.ts)
