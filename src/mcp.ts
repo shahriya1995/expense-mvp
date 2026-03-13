@@ -11,9 +11,10 @@
  */
 
 import { v4 as uuidv4 } from 'uuid';
-import { createExpense } from './db';
 import { Expense } from './types';
 import { callOllama, checkOllamaHealth } from './ollama';
+import { toolRegistry, tools } from './tools';
+import { ToolCall } from './tools/types';
 
 export type Role = 'user' | 'assistant' | 'system';
 
@@ -29,11 +30,12 @@ export interface Context {
   title?: string;
   messages: Message[];
   createdAt: string;
+  lastToolResults?: Array<{ tool: string; result: unknown }>;
 }
 
 interface ConversationInterpretation {
   reply: string;
-  expenses: Array<Partial<Omit<Expense, 'id'>>>;
+  tool_calls: ToolCall[];
 }
 
 const contexts = new Map<string, Context>();
@@ -68,6 +70,19 @@ function getRecentConversation(contextId: string, limit = 8): Message[] {
   const c = contexts.get(contextId);
   if (!c) return [];
   return c.messages.slice(-limit);
+}
+
+function getLastToolResults(contextId: string): Array<{ tool: string; result: unknown }> {
+  return contexts.get(contextId)?.lastToolResults || [];
+}
+
+function setLastToolResults(
+  contextId: string,
+  toolResults: Array<{ tool: string; result: unknown }>
+) {
+  const c = contexts.get(contextId);
+  if (!c) return;
+  c.lastToolResults = toolResults;
 }
 
 function getFetch(): typeof fetch {
@@ -171,20 +186,6 @@ function extractJsonFromText(text: string): any | null {
   }
 
   return null;
-}
-
-function toCents(amount: any): number {
-  if (amount == null) return 0;
-  if (typeof amount === 'number') return Math.round(amount * 100);
-
-  const s = String(amount)
-    .replace(/[,\s]/g, '')
-    .replace(/[^0-9.\-]/g, '');
-
-  const n = Number(s);
-  if (Number.isFinite(n)) return Math.round(n * 100);
-
-  return 0;
 }
 
 /**
@@ -312,128 +313,328 @@ export async function handleLLMRequest(prompt: string): Promise<string> {
   }
 }
 
-export async function generateFriendlyReply(
-  contextId: string,
-  userText: string
-): Promise<string> {
-  const recent = getRecentConversation(contextId)
-    .map((msg) => `${msg.role}: ${msg.content}`)
+function buildToolRegistryText(): string {
+  return tools
+    .map((tool) => `- ${tool.name}: ${tool.description}`)
     .join('\n');
-
-  try {
-    return await callLLM({
-      userText:
-        `Recent conversation:\n${recent || '(empty)'}\n\n` +
-        `Reply to the latest user message naturally:\n${userText}`,
-      systemInstruction:
-        `You are a friendly expense assistant. Keep replies warm, concise, and helpful. ` +
-        `Do not mention internal tools, JSON, analysis steps, or storage unless the user asks. ` +
-        `If the user is making small talk, respond conversationally. ` +
-        `If an expense sounds unclear, ask one short follow-up question instead of guessing. ` +
-        `Adapt to the user's phrasing naturally and help them clarify amounts or merchants when needed.`,
-      temperature: 0.7,
-      maxOutputTokens: 220,
-    });
-  } catch (err: any) {
-    console.error('[CHAT] Friendly reply failed:', String(err?.message || err));
-    return `I'm having trouble replying right now. Please try again.`;
-  }
 }
 
-function normalizePlannedExpenses(
-  expenses: Array<Partial<Omit<Expense, 'id'>>> | undefined
-): Omit<Expense, 'id'>[] {
-  if (!Array.isArray(expenses)) return [];
+function buildToolUsageGuide(): string {
+  return [
+    '- create_expense: use when the user is adding a new expense and amount/description are clear.',
+    '- update_expense: use when the user wants to change an existing expense and you know which one.',
+    '- delete_expense: use when the user wants to remove an existing expense and you know which one.',
+    '- list_expenses: use for questions about stored expenses, recent entries, expenses for a date range, category lookups, or to find a target before update/delete. It returns at most 4 expenses.',
+    '- monthly_summary: use for questions about totals or category breakdowns for a month.',
+  ].join('\n');
+}
 
-  const normalized: Omit<Expense, 'id'>[] = [];
+function logStep(label: string, startedAt: number, extra?: Record<string, unknown>) {
+  const durationMs = Date.now() - startedAt;
+  if (extra) {
+    console.log(`[MCP] ${label} (${durationMs}ms)`, extra);
+    return;
+  }
+  console.log(`[MCP] ${label} (${durationMs}ms)`);
+}
 
-  for (const expense of expenses) {
-    const description = String(expense.description || '').trim();
-    const amount = toCents(expense.amount);
+function normalizeToolCalls(toolCalls: unknown): ToolCall[] {
+  if (!Array.isArray(toolCalls)) return [];
 
-    if (!description || amount <= 0) continue;
+  const normalized: ToolCall[] = [];
 
-    const currency = String(expense.currency || 'USD');
-    const dateValue = expense.date ? new Date(String(expense.date)) : new Date();
-    const safeDate = Number.isNaN(dateValue.getTime())
-      ? new Date().toISOString()
-      : dateValue.toISOString();
+  for (const entry of toolCalls) {
+    if (!entry || typeof entry !== 'object') continue;
+
+    const tool = typeof (entry as any).tool === 'string' ? (entry as any).tool.trim() : '';
+    const args = (entry as any).arguments;
+
+    if (!tool || !toolRegistry.has(tool)) continue;
+    if (!args || typeof args !== 'object' || Array.isArray(args)) continue;
 
     normalized.push({
-      description,
-      amount,
-      currency,
-      date: safeDate,
-      category: expense.category ? String(expense.category) : undefined,
-      notes: expense.notes ? String(expense.notes) : undefined,
+      tool,
+      arguments: args as Record<string, unknown>,
     });
   }
 
   return normalized;
 }
 
-async function interpretConversationTurn(
-  contextId: string,
-  userText: string
-): Promise<ConversationInterpretation> {
+function formatDollarsFromCents(amount: number): string {
+  return `$${(amount / 100).toFixed(2)}`;
+}
+
+function summarizeToolResultsForReply(
+  toolResults: Array<{ tool: string; result: unknown }>
+): string {
+  if (toolResults.length === 0) return '(none)';
+
+  return toolResults
+    .map((entry) => {
+      if (entry.tool === 'list_expenses' && Array.isArray(entry.result)) {
+        const expenses = entry.result as Expense[];
+        if (expenses.length === 0) {
+          return 'list_expenses: no expenses found';
+        }
+
+        const lines = expenses.map((expense, index) =>
+          `${index + 1}. ${expense.description} - ${formatDollarsFromCents(expense.amount)}`
+        );
+        return `list_expenses:\n${lines.join('\n')}`;
+      }
+
+      if (entry.tool === 'monthly_summary' && entry.result && typeof entry.result === 'object') {
+        const summary = entry.result as {
+          total?: number;
+          count?: number;
+          byCategory?: Record<string, number>;
+        };
+        const categories = summary.byCategory
+          ? Object.entries(summary.byCategory)
+              .slice(0, 5)
+              .map(([category, amount]) => `${category}: ${formatDollarsFromCents(amount)}`)
+              .join(', ')
+          : '';
+        return `monthly_summary: total=${formatDollarsFromCents(summary.total || 0)}, count=${summary.count || 0}${categories ? `, categories=${categories}` : ''}`;
+      }
+
+      if (entry.tool === 'create_expense' && entry.result && typeof entry.result === 'object') {
+        const expense = entry.result as Expense;
+        return `create_expense: ${expense.description} - ${formatDollarsFromCents(expense.amount)}`;
+      }
+
+      if (entry.tool === 'update_expense' && entry.result && typeof entry.result === 'object') {
+        const expense = entry.result as Partial<Expense>;
+        return `update_expense: ${expense.description || 'expense'} ${typeof expense.amount === 'number' ? `- ${formatDollarsFromCents(expense.amount)}` : ''}`.trim();
+      }
+
+      if (entry.tool === 'delete_expense' && entry.result && typeof entry.result === 'object') {
+        const result = entry.result as { deleted?: boolean; id?: string };
+        return `delete_expense: ${result.deleted ? 'deleted' : 'not found'}${result.id ? ` (${result.id})` : ''}`;
+      }
+
+      return `${entry.tool}: ${JSON.stringify(entry.result)}`;
+    })
+    .join('\n');
+}
+
+async function generateFallbackReply(contextId: string, userText: string): Promise<string> {
   const recent = getRecentConversation(contextId)
+    .slice(-4)
+    .map((msg) => `${msg.role}: ${msg.content}`)
+    .join('\n');
+  const startedAt = Date.now();
+
+  try {
+    const reply = await callLLM({
+      userText:
+        `Conversation so far:\n${recent || '(empty)'}\n\n` +
+        `Latest user message:\n${userText}\n\n` +
+        `Reply naturally to the user.`,
+      systemInstruction:
+        `You are a friendly expense assistant. Reply naturally, briefly, and helpfully. ` +
+        `Do not return JSON. Do not mention tools or internal processing. ` +
+        `If the user is greeting you or making small talk, respond conversationally. ` +
+        `If the user might be describing an expense but it is unclear, ask one short follow-up question.`,
+      temperature: 0.4,
+      maxOutputTokens: 80,
+    });
+    logStep('fallback_reply', startedAt);
+    return reply;
+  } catch (err: any) {
+    logStep('fallback_reply_failed', startedAt, { error: String(err?.message || err) });
+    console.error('[CHAT_FALLBACK] Reply failed:', String(err?.message || err));
+    return `I'm having trouble replying right now. Please try again.`;
+  }
+}
+
+async function generateToolAwareReply(
+  contextId: string,
+  userText: string,
+  toolResults: Array<{ tool: string; result: unknown }>
+): Promise<string> {
+  const recent = getRecentConversation(contextId)
+    .slice(-4)
     .map((msg) => `${msg.role}: ${msg.content}`)
     .join('\n');
 
+  const toolHistory = summarizeToolResultsForReply(toolResults);
+  const startedAt = Date.now();
+
+  try {
+    const reply = await callLLM({
+      userText:
+        `Conversation so far:\n${recent || '(empty)'}\n\n` +
+        `Latest user message:\n${userText}\n\n` +
+        `Tool results from this turn:\n${toolHistory}\n\n` +
+        `Reply naturally to the user based on these tool results.`,
+      systemInstruction:
+        `You are a friendly expense assistant. Reply naturally, briefly, and helpfully. ` +
+        `Do not return JSON. Do not mention tools or internal processing. ` +
+        `Ground your reply in the actual tool results. ` +
+        `Answer data questions directly from the tool results instead of deflecting or asking unnecessary follow-ups. ` +
+        `If the tool result includes expenses, list the real descriptions and amounts. ` +
+        `For list_expenses results, prefer a numbered list like "1. lunch - $12.00". ` +
+        `Remember that list_expenses returns at most 4 expenses. ` +
+        `When helping with delete or update, prefer human-readable entries like description and amount, not raw IDs. ` +
+        `Only mention an ID if it is a real ID from the tool result and the user explicitly asked for IDs. ` +
+        `For monthly_summary, mention the real total and count. ` +
+        `For create/update/delete, confirm the real outcome. ` +
+        `Never use placeholders like [Expense 1], [ID], or [Display details ...]. ` +
+        `If nothing was found, say that clearly. ` +
+        `If list_expenses returned entries, include all returned entries in your reply.`,
+      temperature: 0.4,
+      maxOutputTokens: 220,
+    });
+    logStep('tool_aware_reply', startedAt, { toolCount: toolResults.length });
+    return reply;
+  } catch (err: any) {
+    logStep('tool_aware_reply_failed', startedAt, { error: String(err?.message || err) });
+    console.error('[CHAT_TOOL_FALLBACK] Reply failed:', String(err?.message || err));
+    return `I'm having trouble replying right now. Please try again.`;
+  }
+}
+
+async function interpretConversationTurn(
+  contextId: string,
+  userText: string,
+  toolResults: Array<{ tool: string; result: unknown }> = []
+): Promise<ConversationInterpretation> {
+  const recent = getRecentConversation(contextId)
+    .slice(-6)
+    .map((msg) => `${msg.role}: ${msg.content}`)
+    .join('\n');
+
+  const effectiveToolResults = toolResults.length > 0 ? toolResults : getLastToolResults(contextId);
+
+  const toolHistory = effectiveToolResults.length > 0
+    ? effectiveToolResults
+        .map((entry) => `tool ${entry.tool}: ${JSON.stringify(entry.result)}`)
+        .join('\n')
+    : '(none)';
+  const startedAt = Date.now();
+
   const systemInstruction =
-    `You are an expense assistant. Interpret the latest user message using the conversation history and return ONLY valid JSON. ` +
+    `You are an expense assistant with tool access. Interpret the latest user message using the conversation history and return ONLY valid JSON. ` +
     `Never answer with prose outside JSON. Never use markdown. ` +
-    `If the message is casual conversation, questions, thanks, or anything that should not be saved, reply normally and return an empty expenses array. ` +
-    `If the message clearly describes one or more expenses that should be saved now, reply naturally and include those expenses. ` +
-    `If the message might refer to an expense but is ambiguous, ask a follow-up question in reply and return an empty expenses array. ` +
-    `Keep asking follow-up questions until you know enough to save a real expense confidently. ` +
-    `Do not include any expense object unless the amount and what was spent are clear enough to store. ` +
-    `If you are still unsure, return expenses as an empty array. ` +
-    `Use the conversation history to understand natural follow-up replies, confirmations, corrections, and extra details. ` +
-    `Do not require the user to answer in any fixed format. Infer meaning from normal language. ` +
-    `If the assistant previously asked a clarification question, include expenses only when the follow-up makes the expense clear enough to save. ` +
-    `Each expense must have a description and amount in dollars. ` +
+    `Available tools:\n${buildToolRegistryText()}\n\n` +
+    `When to use them:\n${buildToolUsageGuide()}\n\n` +
+    `Use tool_calls when a tool should be executed. If you still need clarification, ask a natural follow-up question and return an empty tool_calls array. ` +
+    `Let normal conversation stay conversational with an empty tool_calls array. ` +
+    `If the user wants to add or modify expenses and you have enough detail, return the appropriate tool call with arguments. ` +
+    `If the user asks questions about saved expense data, expense history, recent entries, dates, categories, or totals, call the relevant read tool instead of answering from memory. ` +
+    `If the user wants to update or delete an expense but does not provide an id, first call list_expenses to find the matching expense. ` +
+    `Use the list_expenses result to identify the expense id, then call update_expense or delete_expense in the next response. ` +
+    `If the previous turn already returned a numbered expense list, use that previous tool result to resolve follow-ups like "delete 2", "the second one", or "remove the first expense". ` +
+    `If multiple expenses could match, ask a short follow-up question instead of guessing. ` +
+    `For delete/update disambiguation, present human-readable entries using description and amount. Do not ask the user to choose from placeholder IDs. ` +
+    `Use list_expenses flexibly: use limit for "last 3 entries", relative_day for "today" or "yesterday", days_back for requests like "last 10 days", and date_from/date_to for specific date ranges. ` +
+    `Do not request more than 4 expenses from list_expenses because it will only return up to 4. ` +
+    `If the user asks "what do I have", "what expenses do you see", "show me my entries", "what did I spend on food", or similar data questions, use list_expenses or monthly_summary. ` +
+    `If the user asks a fresh question like "what expenses do you see?", do not assume the old date filter still applies unless they restate it. ` +
+    `When a tool result contains expenses, refer to the real descriptions and amounts from the tool result. Do not use placeholders like [Expense 1], [ID], or entry 1. ` +
+    `Use the conversation history to understand natural follow-up replies, corrections, and extra details. Do not require yes/no or any fixed format. ` +
+    `After tool results are provided, either ask the next follow-up question, call another tool, or give a final natural reply. ` +
     `The reply should be friendly and concise. ` +
     `Examples:
 User: "hi"
-Output: {"reply":"Hi. What can I help you with today?","expenses":[]}
+Output: {"reply":"Hi. What can I help you with today?","tool_calls":[]}
 
 User: "I spent $12 on lunch"
-Output: {"reply":"Got it, I added $12 for lunch.","expenses":[{"description":"lunch","amount":12,"currency":"USD","category":"Food"}]}
+Output: {"reply":"I'll add that now.","tool_calls":[{"tool":"create_expense","arguments":{"description":"lunch","amount":12,"currency":"USD","category":"Food"}}]}
 
 User: "20$ shoes, 10$ socks, 50$ food"
-Output: {"reply":"Done, I added shoes for $20, socks for $10, and food for $50.","expenses":[{"description":"shoes","amount":20,"currency":"USD","category":"Shopping"},{"description":"socks","amount":10,"currency":"USD","category":"Shopping"},{"description":"food","amount":50,"currency":"USD","category":"Food"}]}
+Output: {"reply":"I'll add those now.","tool_calls":[{"tool":"create_expense","arguments":{"description":"shoes","amount":20,"currency":"USD","category":"Shopping"}},{"tool":"create_expense","arguments":{"description":"socks","amount":10,"currency":"USD","category":"Shopping"}},{"tool":"create_expense","arguments":{"description":"food","amount":50,"currency":"USD","category":"Food"}}]}
 
 User: "20 socks"
-Output: {"reply":"Do you mean $20 for socks?","expenses":[]}
+Output: {"reply":"Do you mean $20 for socks?","tool_calls":[]}
 
 User: "i bought 100 of carpet"
-Output: {"reply":"Do you mean $100 for carpet?","expenses":[]}
+Output: {"reply":"Do you mean $100 for carpet?","tool_calls":[]}
+
+User: "How much did I spend this month?"
+Output: {"reply":"Let me check this month for you.","tool_calls":[{"tool":"monthly_summary","arguments":{}}]}
+
+User: "Show me my last 3 expenses"
+Output: {"reply":"Sure, I'll pull the latest ones.","tool_calls":[{"tool":"list_expenses","arguments":{"limit":3}}]}
+
+Tool result:
+tool list_expenses: [{"id":"exp_3","description":"coffee","amount":450,"currency":"USD","date":"2026-03-12T09:00:00.000Z","category":"Food"},{"id":"exp_4","description":"socks","amount":1800,"currency":"USD","date":"2026-03-12T10:00:00.000Z","category":"Shopping"},{"id":"exp_5","description":"groceries","amount":4000,"currency":"USD","date":"2026-03-12T11:00:00.000Z","category":"Food"}]
+Output: {"reply":"Here are your last 3 expenses:\n1. groceries - $40.00\n2. socks - $18.00\n3. coffee - $4.50","tool_calls":[]}
+
+User: "last 3 expenses of yesterday"
+Output: {"reply":"Sure, I'll check yesterday's last 3 expenses.","tool_calls":[{"tool":"list_expenses","arguments":{"relative_day":"yesterday","limit":3}}]}
+
+User: "what about today?"
+Output: {"reply":"I'll check today's expenses.","tool_calls":[{"tool":"list_expenses","arguments":{"relative_day":"today","limit":4}}]}
+
+User: "show me expenses from the last 10 days"
+Output: {"reply":"Sure, I'll check the last 10 days.","tool_calls":[{"tool":"list_expenses","arguments":{"days_back":10}}]}
+
+User: "what expenses do you see?"
+Output: {"reply":"I'll pull the recent expenses I can see.","tool_calls":[{"tool":"list_expenses","arguments":{"limit":4}}]}
+
+User: "Delete the lunch expense from today"
+Output: {"reply":"Let me find that first.","tool_calls":[{"tool":"list_expenses","arguments":{"limit":4}}]}
+
+Tool result:
+tool list_expenses: [{"id":"exp_1","description":"lunch","amount":1200,"currency":"USD","date":"2026-03-12T12:00:00.000Z","category":"Food"}]
+Output: {"reply":"Okay, I'll remove that lunch expense.","tool_calls":[{"tool":"delete_expense","arguments":{"id":"exp_1"}}]}
+
+Tool result:
+tool delete_expense: {"deleted":true,"id":"exp_1"}
+Output: {"reply":"Done, I removed that lunch expense.","tool_calls":[]}
+
+User: "I want to delete an expense"
+Output: {"reply":"Sure, I'll pull a few recent expenses so you can pick one.","tool_calls":[{"tool":"list_expenses","arguments":{"limit":3}}]}
+
+Tool result:
+tool list_expenses: [{"id":"exp_6","description":"books","amount":5000,"currency":"USD","date":"2026-03-12T09:00:00.000Z","category":"Books"},{"id":"exp_7","description":"apples","amount":10000,"currency":"USD","date":"2026-03-12T10:00:00.000Z","category":"Food"},{"id":"exp_8","description":"pens","amount":400,"currency":"USD","date":"2026-03-12T11:00:00.000Z","category":"Office"}]
+Output: {"reply":"Here are your last 3 expenses:\n1. books - $50.00\n2. apples - $100.00\n3. pens - $4.00\nWhich one do you want me to delete?","tool_calls":[]}
+
+Bad output:
+{"reply":"Sure thing, here are the last three entries with their IDs:\n1. [ID]\n2. [ID]\n3. [ID]\nLet me know which ones you want to delete.","tool_calls":[]}
+This is wrong because it uses placeholder IDs instead of the real descriptions and amounts from the tool result.
+
+User: "Update my Nike expense to $35"
+Output: {"reply":"Let me find the Nike expense first.","tool_calls":[{"tool":"list_expenses","arguments":{"limit":4}}]}
+
+Tool result:
+tool list_expenses: [{"id":"exp_2","description":"socks at Nike","amount":4000,"currency":"USD","date":"2026-03-12T12:00:00.000Z","category":"Shopping"}]
+Output: {"reply":"I'll update that Nike expense now.","tool_calls":[{"tool":"update_expense","arguments":{"id":"exp_2","amount":35}}]}
 
 Conversation:
 assistant: "Do you mean $100 for carpet?"
 user: "yeah that's right"
-Output: {"reply":"Okay, I added carpet for $100.","expenses":[{"description":"carpet","amount":100,"currency":"USD","category":"Home"}]}
+Output: {"reply":"Okay, I'll add it.","tool_calls":[{"tool":"create_expense","arguments":{"description":"carpet","amount":100,"currency":"USD","category":"Home"}}]}
 
 Conversation:
 assistant: "Do you mean $20 for socks?"
 user: "not 20, it was closer to 18"
-Output: {"reply":"Thanks, I updated it to $18 for socks.","expenses":[{"description":"socks","amount":18,"currency":"USD","category":"Shopping"}]}
+Output: {"reply":"Thanks, I'll add it as $18.","tool_calls":[{"tool":"create_expense","arguments":{"description":"socks","amount":18,"currency":"USD","category":"Shopping"}}]}
 
 Conversation:
 assistant: "What amount should I save for the socks?"
 user: "it was from Nike"
-Output: {"reply":"How much did you spend at Nike?","expenses":[]}
+Output: {"reply":"How much did you spend at Nike?","tool_calls":[]}
+
+Tool result:
+tool monthly_summary: {"month":3,"year":2026,"total":5200,"count":2,"byCategory":{"Food":1200,"Shopping":4000}}
+Output: {"reply":"You spent $52.00 this month across 2 expenses. Food was $12.00 and Shopping was $40.00.","tool_calls":[]}
 
 Return JSON in this exact shape:
-{"reply":"string","expenses":[{"description":"string","amount":12.34,"currency":"USD","date":"optional ISO string","category":"optional string","notes":"optional string"}]}.`;
+{"reply":"string","tool_calls":[{"tool":"tool_name","arguments":{"key":"value"}}]}.`;
 
   try {
     const raw = await callLLM({
-      userText: `Conversation so far:\n${recent || '(empty)'}\n\nLatest user message:\n${userText}`,
+      userText:
+        `Conversation so far:\n${recent || '(empty)'}\n\n` +
+        `Latest user message:\n${userText}\n\n` +
+        `Tool results from this turn:\n${toolHistory}`,
       systemInstruction,
       temperature: 0,
-      maxOutputTokens: 300,
+      maxOutputTokens: 220,
     });
 
     const parsed = extractJsonFromText(raw);
@@ -443,41 +644,67 @@ Return JSON in this exact shape:
       typeof parsed === 'object' &&
       typeof parsed.reply === 'string'
     ) {
+      logStep('interpret_turn', startedAt, {
+        toolCalls: Array.isArray(parsed.tool_calls) ? parsed.tool_calls.length : 0,
+      });
       return {
         reply: parsed.reply,
-        expenses: Array.isArray(parsed.expenses) ? parsed.expenses : [],
+        tool_calls: normalizeToolCalls(parsed.tool_calls),
       };
     }
   } catch (err: any) {
+    logStep('interpret_turn_failed', startedAt, { error: String(err?.message || err) });
     console.error('[CHAT_INTERPRET] Interpretation failed:', String(err?.message || err));
   }
 
   return {
-    reply: await generateFriendlyReply(contextId, userText),
-    expenses: [],
+    reply: await generateFallbackReply(contextId, userText),
+    tool_calls: [],
   };
 }
 
-async function storeParsedExpenses(entries: Omit<Expense, 'id'>[]): Promise<Expense[]> {
+async function executeToolCalls(
+  toolCalls: ToolCall[]
+): Promise<{
+  stored: Expense[];
+  results: Array<{ tool: string; result: unknown }>;
+}> {
   const stored: Expense[] = [];
+  const results: Array<{ tool: string; result: unknown }> = [];
 
-  for (const entry of entries) {
-    const expense: Expense = {
-      id: uuidv4(),
-      ...entry,
-    };
+  for (const call of toolCalls) {
+    const tool = toolRegistry.get(call.tool);
+    if (!tool) continue;
+    const startedAt = Date.now();
 
     try {
-      stored.push(await createExpense(expense));
+      const result = await tool.execute(call.arguments);
+      logStep('tool_execute', startedAt, { tool: call.tool });
+      results.push({ tool: call.tool, result });
+
+      if (call.tool === 'create_expense' && result && typeof result === 'object') {
+        stored.push(result as Expense);
+      }
     } catch (err: any) {
+      logStep('tool_execute_failed', startedAt, {
+        tool: call.tool,
+        error: String(err?.message || err),
+      });
       console.error(
-        '[EXPENSE_STORE] Failed to store parsed expense:',
+        '[TOOL_EXECUTE] Failed to execute tool:',
         String(err?.message || err)
       );
+      results.push({
+        tool: call.tool,
+        result: { error: String(err?.message || err) },
+      });
     }
   }
 
-  return stored;
+  return {
+    stored,
+    results,
+  };
 }
 
 export async function handleConversationTurn(
@@ -488,115 +715,61 @@ export async function handleConversationTurn(
   stored: Expense[];
   storeCount: number;
   detectedExpense: boolean;
+  toolCalls: ToolCall[];
+  toolResults: Array<{ tool: string; result: unknown }>;
 }> {
-  const interpretation = await interpretConversationTurn(contextId, userText);
-  const plannedExpenses = normalizePlannedExpenses(interpretation.expenses);
+  const startedAt = Date.now();
+  let finalReply = '';
+  let toolResults: Array<{ tool: string; result: unknown }> = [];
+  let allStored: Expense[] = [];
+  const allToolCalls: ToolCall[] = [];
 
-  if (plannedExpenses.length === 0) {
-    return {
-      assistantText: interpretation.reply || `Could you say a little more about that?`,
-      stored: [],
-      storeCount: 0,
-      detectedExpense: false,
-    };
-  }
+  for (let step = 0; step < 4; step++) {
+    const stepStartedAt = Date.now();
+    const interpretation = await interpretConversationTurn(contextId, userText, toolResults);
+    finalReply = interpretation.reply || 'Could you say a little more about that?';
 
-  const stored = await storeParsedExpenses(plannedExpenses);
+    if (interpretation.tool_calls.length === 0) {
+      const assistantText =
+        toolResults.length > 0 &&
+        finalReply === `I'm having trouble replying right now. Please try again.`
+          ? await generateToolAwareReply(contextId, userText, toolResults)
+          : finalReply;
 
-  return {
-    assistantText: interpretation.reply,
-    stored,
-    storeCount: stored.length,
-    detectedExpense: true,
-  };
-}
-
-/**
- * Analyze free-form expense text with the selected LLM, extract structured expense(s), and store them.
- */
-export async function analyzeAndStoreExpense(
-  freeText: string
-): Promise<{ stored: Expense[]; assistantText: string }> {
-  const systemInstruction =
-    `Extract expense information from this text. Return ONLY valid JSON (no markdown, no code blocks, no explanation). ` +
-    `The JSON must be a valid object with an "expenses" array containing expense objects. ` +
-    `If the text does not clearly describe an expense with an amount, return {"expenses":[]}. ` +
-    `Each expense must have: description (string), amount (number in dollars), currency (string, default USD), ` +
-    `date (ISO string, default today), category (string, optional), notes (string, optional). ` +
-    `Example: {"expenses":[{"description":"coffee","amount":5,"currency":"USD","date":"2026-03-11","category":"Food"}]} ` +
-    `IMPORTANT: Return only the JSON object, nothing else.`;
-
-  let assistantText = '';
-
-  try {
-    assistantText = await callLLM({
-      userText: `Text to analyze: "${freeText}"`,
-      systemInstruction,
-      temperature: 0,
-      maxOutputTokens: 512,
-    });
-  } catch (err: any) {
-    console.error('[EXPENSE_ANALYZE] LLM call failed:', String(err?.message || err));
-    assistantText = `Failed to analyze expense: ${String(err?.message || err)}`;
-  }
-
-  let parsed: any = null;
-
-  try {
-    parsed = JSON.parse(assistantText);
-  } catch {
-    parsed = extractJsonFromText(assistantText);
-  }
-
-  const toStore: Expense[] = [];
-
-  if (parsed && typeof parsed === 'object') {
-    let root = parsed.expenses
-      ? parsed.expenses
-      : Array.isArray(parsed)
-        ? parsed
-        : [parsed];
-
-    if (!Array.isArray(root)) {
-      root = typeof root === 'object' && root !== null ? [root] : [];
-    }
-
-    for (const obj of root) {
-      if (typeof obj !== 'object' || obj === null) continue;
-
-      const desc = obj.description ?? freeText;
-      const amt = toCents(obj.amount ?? obj.total ?? obj.price);
-
-      if (amt <= 0) continue;
-
-      const currency = obj.currency ?? obj.ccy ?? 'USD';
-      const rawDate = obj.date ?? new Date().toISOString();
-      const parsedDate = new Date(rawDate);
-      const safeDate = Number.isNaN(parsedDate.getTime())
-        ? new Date().toISOString()
-        : parsedDate.toISOString();
-
-      const category = obj.category ?? obj.cat ?? undefined;
-      const notes = obj.notes ?? obj.note ?? undefined;
-
-      const expense: Expense = {
-        id: uuidv4(),
-        description: String(desc),
-        amount: amt,
-        currency: String(currency),
-        date: safeDate,
-        category,
-        notes,
+      return {
+        assistantText,
+        stored: allStored,
+        storeCount: allStored.length,
+        detectedExpense: allStored.length > 0,
+        toolCalls: allToolCalls,
+        toolResults,
       };
-
-      try {
-        const stored = await createExpense(expense);
-        toStore.push(stored);
-      } catch (err: any) {
-        console.error('[EXPENSE_ANALYZE] Failed to store expense:', String(err?.message || err));
-      }
     }
+
+    allToolCalls.push(...interpretation.tool_calls);
+    const executed = await executeToolCalls(interpretation.tool_calls);
+    toolResults = executed.results;
+    setLastToolResults(contextId, toolResults);
+    allStored = allStored.concat(executed.stored);
+    logStep('conversation_step', stepStartedAt, {
+      step,
+      toolCalls: interpretation.tool_calls.map((call) => call.tool),
+    });
   }
 
-  return { stored: toStore, assistantText };
+  logStep('conversation_turn_complete', startedAt, {
+    toolCalls: allToolCalls.map((call) => call.tool),
+    stored: allStored.length,
+  });
+  return {
+    assistantText:
+      toolResults.length > 0
+        ? await generateToolAwareReply(contextId, userText, toolResults)
+        : finalReply || 'I ran into a problem finishing that request.',
+    stored: allStored,
+    storeCount: allStored.length,
+    detectedExpense: allStored.length > 0,
+    toolCalls: allToolCalls,
+    toolResults,
+  };
 }

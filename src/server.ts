@@ -38,10 +38,12 @@ export function createServer() {
           stored: result.stored,
           storeCount: result.storeCount,
           detectedExpense: result.detectedExpense,
+          toolCalls: result.toolCalls,
+          toolResults: result.toolResults,
         });
       } catch (err: any) {
         const e = String(err);
-        console.error('[SERVER] analyzeAndStoreExpense failed:', e);
+        console.error('[SERVER] handleConversationTurn failed:', e);
         mcp.addMessage(contextId, 'assistant', e);
         return res.status(500).json({ error: e });
       }

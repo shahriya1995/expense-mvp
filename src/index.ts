@@ -1,12 +1,10 @@
 import dotenv from 'dotenv';
 dotenv.config();
 
-// Validate required environment variables
-const requiredEnvVars = ['GEMINI_API_KEY'];
-for (const envVar of requiredEnvVars) {
-  if (!process.env[envVar]) {
-    throw new Error(`Missing required environment variable: ${envVar}`);
-  }
+const provider = (process.env.LLM_PROVIDER || 'gemini').toLowerCase();
+
+if (provider === 'gemini' && !process.env.GEMINI_API_KEY && !process.env.GEMINI_BEARER_TOKEN) {
+  throw new Error('Missing required environment variable: GEMINI_API_KEY or GEMINI_BEARER_TOKEN');
 }
 
 import { createServer } from './server';
