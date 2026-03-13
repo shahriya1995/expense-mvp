@@ -30,12 +30,22 @@ function getOllamaModel(): string {
   return process.env.OLLAMA_MODEL || 'mistral';
 }
 
+function getOllamaKeepAlive(): string {
+  return process.env.OLLAMA_KEEP_ALIVE || '30m';
+}
+
+export interface OllamaChatMessage {
+  role: 'system' | 'user' | 'assistant';
+  content: string;
+}
+
 /**
  * Call Ollama API for text generation.
  * Uses the Ollama chat endpoint.
  */
 export async function callOllama(opts: {
-  userText: string;
+  userText?: string;
+  messages?: OllamaChatMessage[];
   systemInstruction?: string;
   temperature?: number;
   maxOutputTokens?: number;
@@ -46,16 +56,23 @@ export async function callOllama(opts: {
 
   const url = `${baseUrl}/api/chat`;
 
-  const messages: Array<{ role: 'system' | 'user'; content: string }> = [];
-  if (opts.systemInstruction) {
-    messages.push({ role: 'system', content: opts.systemInstruction });
-  }
-  messages.push({ role: 'user', content: opts.userText });
+  const messages =
+    opts.messages && opts.messages.length > 0
+      ? opts.messages
+      : [
+          ...(opts.systemInstruction
+            ? [{ role: 'system' as const, content: opts.systemInstruction }]
+            : []),
+          ...(opts.userText
+            ? [{ role: 'user' as const, content: opts.userText }]
+            : []),
+        ];
 
   const body = {
     model,
     messages,
     stream: false,
+    keep_alive: getOllamaKeepAlive(),
     options: {
       temperature: opts.temperature ?? 0.7,
       num_predict: opts.maxOutputTokens ?? 512,

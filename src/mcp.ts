@@ -11,12 +11,19 @@
  */
 
 import { v4 as uuidv4 } from 'uuid';
+import { GoogleGenAI } from '@google/genai';
 import { Expense } from './types';
-import { callOllama, checkOllamaHealth } from './ollama';
+import { callOllama, checkOllamaHealth, OllamaChatMessage } from './ollama';
 import { toolRegistry, tools } from './tools';
 import { ToolCall } from './tools/types';
 
 export type Role = 'user' | 'assistant' | 'system';
+type PlannerRole = 'user' | 'assistant';
+
+interface PlannerMessage {
+  role: PlannerRole;
+  content: string;
+}
 
 export interface Message {
   id: string;
@@ -31,6 +38,11 @@ export interface Context {
   messages: Message[];
   createdAt: string;
   lastToolResults?: Array<{ tool: string; result: unknown }>;
+  plannerMessages?: PlannerMessage[];
+  plannerSummary?: string;
+  geminiPlannerChat?: any;
+  geminiPlannerInstruction?: string;
+  ollamaPlannerInstruction?: string;
 }
 
 interface ConversationInterpretation {
@@ -39,6 +51,9 @@ interface ConversationInterpretation {
 }
 
 const contexts = new Map<string, Context>();
+const MAX_PLANNER_MESSAGES = 10;
+const KEEP_RECENT_PLANNER_MESSAGES = 4;
+const MAX_PLANNER_SUMMARY_CHARS = 1200;
 
 export function createContext(title?: string) {
   const id = uuidv4();
@@ -66,12 +81,6 @@ export function addMessage(contextId: string, role: Role, content: string) {
   return m;
 }
 
-function getRecentConversation(contextId: string, limit = 8): Message[] {
-  const c = contexts.get(contextId);
-  if (!c) return [];
-  return c.messages.slice(-limit);
-}
-
 function getLastToolResults(contextId: string): Array<{ tool: string; result: unknown }> {
   return contexts.get(contextId)?.lastToolResults || [];
 }
@@ -83,6 +92,101 @@ function setLastToolResults(
   const c = contexts.get(contextId);
   if (!c) return;
   c.lastToolResults = toolResults;
+}
+
+function compactPlannerText(text: string, maxChars = 140): string {
+  return text.replace(/\s+/g, ' ').trim().slice(0, maxChars);
+}
+
+function summarizePlannerMessages(messages: PlannerMessage[]): string {
+  return messages
+    .map((message) => `${message.role === 'user' ? 'User' : 'Assistant'}: ${compactPlannerText(message.content)}`)
+    .join('\n');
+}
+
+function compactPlannerState(context: Context) {
+  const messages = context.plannerMessages || [];
+  if (messages.length <= MAX_PLANNER_MESSAGES) return;
+
+  const retained = messages.slice(-KEEP_RECENT_PLANNER_MESSAGES);
+  const older = messages.slice(0, -KEEP_RECENT_PLANNER_MESSAGES);
+  const olderSummary = summarizePlannerMessages(older);
+  const mergedSummary = context.plannerSummary
+    ? `${context.plannerSummary}\n${olderSummary}`
+    : olderSummary;
+
+  context.plannerSummary = mergedSummary.slice(-MAX_PLANNER_SUMMARY_CHARS);
+  context.plannerMessages = retained;
+  context.geminiPlannerChat = undefined;
+}
+
+function appendPlannerExchange(contextId: string, userText: string, reply: string) {
+  const context = contexts.get(contextId);
+  if (!context) return;
+
+  context.plannerMessages = context.plannerMessages || [];
+  context.plannerMessages.push(
+    { role: 'user', content: userText },
+    { role: 'assistant', content: reply }
+  );
+  compactPlannerState(context);
+}
+
+function buildOllamaPlannerMessages(
+  context: Context,
+  systemInstruction?: string,
+  nextUserText?: string
+): OllamaChatMessage[] {
+  const messages: OllamaChatMessage[] = [];
+
+  if (systemInstruction) {
+    messages.push({ role: 'system', content: systemInstruction });
+  }
+
+  if (context.plannerSummary) {
+    messages.push({
+      role: 'user',
+      content: `Session summary:\n${context.plannerSummary}`,
+    });
+    messages.push({ role: 'assistant', content: 'Understood.' });
+  }
+
+  for (const message of context.plannerMessages || []) {
+    messages.push({
+      role: message.role,
+      content: message.content,
+    });
+  }
+
+  if (nextUserText) {
+    messages.push({ role: 'user', content: nextUserText });
+  }
+
+  return messages;
+}
+
+function buildGeminiPlannerHistory(context: Context): Array<{ role: 'user' | 'model'; parts: Array<{ text: string }> }> {
+  const history: Array<{ role: 'user' | 'model'; parts: Array<{ text: string }> }> = [];
+
+  if (context.plannerSummary) {
+    history.push({
+      role: 'user',
+      parts: [{ text: `Session summary:\n${context.plannerSummary}` }],
+    });
+    history.push({
+      role: 'model',
+      parts: [{ text: 'Understood.' }],
+    });
+  }
+
+  for (const message of context.plannerMessages || []) {
+    history.push({
+      role: message.role === 'user' ? 'user' : 'model',
+      parts: [{ text: message.content }],
+    });
+  }
+
+  return history;
 }
 
 function getFetch(): typeof fetch {
@@ -192,26 +296,23 @@ function extractJsonFromText(text: string): any | null {
  * Low-level Gemini caller.
  */
 async function callGemini(opts: {
+  contextId?: string;
   userText: string;
   systemInstruction?: string;
+  useSession?: boolean;
   temperature?: number;
   maxOutputTokens?: number;
   responseMimeType?: string;
   responseSchema?: any;
 }): Promise<any> {
   const key = process.env.GEMINI_API_KEY;
-  const bearer = process.env.GEMINI_BEARER_TOKEN;
   const model = getModel();
 
-  if (!key && !bearer) {
-    throw new Error('Missing GEMINI_API_KEY or GEMINI_BEARER_TOKEN');
+  if (!key) {
+    throw new Error('Missing GEMINI_API_KEY');
   }
 
-  const _fetch = getFetch();
-  const url = buildGeminiUrl(model, key, bearer);
-  const headers = buildHeaders(bearer);
-
-  const generationConfig: Record<string, any> = {
+  const generationConfig: Record<string, unknown> = {
     temperature: opts.temperature ?? 0.7,
     maxOutputTokens: opts.maxOutputTokens ?? 512,
   };
@@ -224,42 +325,61 @@ async function callGemini(opts: {
     generationConfig.responseSchema = opts.responseSchema;
   }
 
-  const body: Record<string, any> = {
-    contents: [
-      {
-        role: 'user',
-        parts: [{ text: opts.userText }],
-      },
-    ],
-    generationConfig,
-  };
+  const ai = new GoogleGenAI({ apiKey: key });
 
-  if (opts.systemInstruction) {
-    body.systemInstruction = {
-      parts: [{ text: opts.systemInstruction }],
-    };
+  if (opts.useSession && opts.contextId) {
+    const context = contexts.get(opts.contextId);
+    if (!context) {
+      throw new Error(`Unknown context: ${opts.contextId}`);
+    }
+
+    const needsNewChat =
+      !context.geminiPlannerChat ||
+      context.geminiPlannerInstruction !== opts.systemInstruction;
+
+    if (needsNewChat) {
+      context.geminiPlannerChat = ai.chats.create({
+        model,
+        config: {
+          ...generationConfig,
+          systemInstruction: opts.systemInstruction,
+        } as any,
+        history: buildGeminiPlannerHistory(context) as any,
+      });
+      context.geminiPlannerInstruction = opts.systemInstruction;
+    }
+
+    const response = await context.geminiPlannerChat.sendMessage({
+      message: opts.userText,
+    });
+    const reply = extractAssistantText(response) || '';
+    appendPlannerExchange(opts.contextId, opts.userText, reply);
+    return response;
   }
 
-  const res = await _fetch(url, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify(body),
+  const chat = ai.chats.create({
+    model,
+    config: opts.systemInstruction
+      ? ({
+          ...generationConfig,
+          systemInstruction: opts.systemInstruction,
+        } as any)
+      : (generationConfig as any),
   });
 
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`Gemini API error ${res.status}: ${text}`);
-  }
-
-  return res.json();
+  return chat.sendMessage({
+    message: opts.userText,
+  });
 }
 
 /**
  * Unified LLM caller - routes to Gemini or Ollama based on LLM_PROVIDER env var.
  */
 async function callLLM(opts: {
+  contextId?: string;
   userText: string;
   systemInstruction?: string;
+  useSession?: boolean;
   temperature?: number;
   maxOutputTokens?: number;
 }): Promise<string> {
@@ -274,6 +394,30 @@ async function callLLM(opts: {
         );
       }
 
+      if (opts.useSession && opts.contextId) {
+        const context = contexts.get(opts.contextId);
+        if (!context) {
+          throw new Error(`Unknown context: ${opts.contextId}`);
+        }
+
+        const needsNewSession =
+          context.ollamaPlannerInstruction !== opts.systemInstruction;
+
+        if (needsNewSession) {
+          context.ollamaPlannerInstruction = opts.systemInstruction;
+        }
+        const nextMessages = buildOllamaPlannerMessages(context, opts.systemInstruction, opts.userText);
+
+        const reply = await callOllama({
+          messages: nextMessages,
+          temperature: opts.temperature,
+          maxOutputTokens: opts.maxOutputTokens,
+        });
+        appendPlannerExchange(opts.contextId, opts.userText, reply);
+
+        return reply;
+      }
+
       return await callOllama(opts);
     } catch (err: any) {
       console.error('[LLM] Ollama call failed:', String(err?.message || err));
@@ -283,8 +427,10 @@ async function callLLM(opts: {
 
   if (provider === 'gemini') {
     const data = await callGemini({
+      contextId: opts.contextId,
       userText: opts.userText,
       systemInstruction: opts.systemInstruction,
+      useSession: opts.useSession,
       temperature: opts.temperature,
       maxOutputTokens: opts.maxOutputTokens,
     });
@@ -420,23 +566,13 @@ function summarizeToolResultsForReply(
 }
 
 async function generateFallbackReply(contextId: string, userText: string): Promise<string> {
-  const recent = getRecentConversation(contextId)
-    .slice(-4)
-    .map((msg) => `${msg.role}: ${msg.content}`)
-    .join('\n');
   const startedAt = Date.now();
 
   try {
     const reply = await callLLM({
       userText:
-        `Conversation so far:\n${recent || '(empty)'}\n\n` +
         `Latest user message:\n${userText}\n\n` +
         `Reply naturally to the user.`,
-      systemInstruction:
-        `You are a friendly expense assistant. Reply naturally, briefly, and helpfully. ` +
-        `Do not return JSON. Do not mention tools or internal processing. ` +
-        `If the user is greeting you or making small talk, respond conversationally. ` +
-        `If the user might be describing an expense but it is unclear, ask one short follow-up question.`,
       temperature: 0.4,
       maxOutputTokens: 80,
     });
@@ -454,36 +590,15 @@ async function generateToolAwareReply(
   userText: string,
   toolResults: Array<{ tool: string; result: unknown }>
 ): Promise<string> {
-  const recent = getRecentConversation(contextId)
-    .slice(-4)
-    .map((msg) => `${msg.role}: ${msg.content}`)
-    .join('\n');
-
   const toolHistory = summarizeToolResultsForReply(toolResults);
   const startedAt = Date.now();
 
   try {
     const reply = await callLLM({
       userText:
-        `Conversation so far:\n${recent || '(empty)'}\n\n` +
         `Latest user message:\n${userText}\n\n` +
         `Tool results from this turn:\n${toolHistory}\n\n` +
         `Reply naturally to the user based on these tool results.`,
-      systemInstruction:
-        `You are a friendly expense assistant. Reply naturally, briefly, and helpfully. ` +
-        `Do not return JSON. Do not mention tools or internal processing. ` +
-        `Ground your reply in the actual tool results. ` +
-        `Answer data questions directly from the tool results instead of deflecting or asking unnecessary follow-ups. ` +
-        `If the tool result includes expenses, list the real descriptions and amounts. ` +
-        `For list_expenses results, prefer a numbered list like "1. lunch - $12.00". ` +
-        `Remember that list_expenses returns at most 4 expenses. ` +
-        `When helping with delete or update, prefer human-readable entries like description and amount, not raw IDs. ` +
-        `Only mention an ID if it is a real ID from the tool result and the user explicitly asked for IDs. ` +
-        `For monthly_summary, mention the real total and count. ` +
-        `For create/update/delete, confirm the real outcome. ` +
-        `Never use placeholders like [Expense 1], [ID], or [Display details ...]. ` +
-        `If nothing was found, say that clearly. ` +
-        `If list_expenses returned entries, include all returned entries in your reply.`,
       temperature: 0.4,
       maxOutputTokens: 220,
     });
@@ -501,11 +616,6 @@ async function interpretConversationTurn(
   userText: string,
   toolResults: Array<{ tool: string; result: unknown }> = []
 ): Promise<ConversationInterpretation> {
-  const recent = getRecentConversation(contextId)
-    .slice(-6)
-    .map((msg) => `${msg.role}: ${msg.content}`)
-    .join('\n');
-
   const effectiveToolResults = toolResults.length > 0 ? toolResults : getLastToolResults(contextId);
 
   const toolHistory = effectiveToolResults.length > 0
@@ -628,11 +738,12 @@ Return JSON in this exact shape:
 
   try {
     const raw = await callLLM({
+      contextId,
       userText:
-        `Conversation so far:\n${recent || '(empty)'}\n\n` +
         `Latest user message:\n${userText}\n\n` +
         `Tool results from this turn:\n${toolHistory}`,
       systemInstruction,
+      useSession: true,
       temperature: 0,
       maxOutputTokens: 220,
     });
