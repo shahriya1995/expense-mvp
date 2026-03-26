@@ -18,6 +18,7 @@
 html,
 body {
   height: 100%;
+  min-height: 100dvh;
 }
 
 body {
@@ -30,9 +31,13 @@ body {
     linear-gradient(180deg, #07101d 0%, #0b1423 52%, #09111f 100%);
 }
 
+footer {
+  display: none !important;
+}
+
 #app {
   max-width: 920px;
-  min-height: 100vh;
+  min-height: 100dvh;
   margin: 0 auto;
   padding: 20px 16px 18px;
   display: flex;
@@ -78,6 +83,7 @@ header {
 main {
   display: flex;
   flex: 1;
+  min-height: 0;
 }
 
 #chat {
@@ -89,16 +95,16 @@ main {
 }
 
 #chat {
-  min-height: 100%;
   padding: 14px;
   display: flex;
   flex-direction: column;
   flex: 1;
+  min-height: 0;
 }
 
 #messages {
   flex: 1;
-  min-height: 300px;
+  min-height: 0;
   overflow: auto;
   padding: 4px 2px 8px;
   display: flex;
@@ -247,15 +253,12 @@ button:disabled {
   #app {
     padding-inline: 16px;
   }
-
-  #messages {
-    max-height: 52vh;
-  }
 }
 
 @media (max-width: 640px) {
   #app {
-    padding: 12px 10px 16px;
+    padding: 12px 10px 10px;
+    min-height: 100dvh;
   }
 
   .brand {
@@ -276,11 +279,10 @@ button:disabled {
   #chat {
     border-radius: 20px;
     padding: 12px;
+    flex: 1;
   }
 
   #messages {
-    min-height: 280px;
-    max-height: 48vh;
     gap: 8px;
   }
 
