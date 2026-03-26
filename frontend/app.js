@@ -4,7 +4,14 @@ let contextId = null;
 function safe(el) { return (el instanceof Element) ? el : null; }
 
 function makeClient(els) {
-  const { MESSAGES_EL, PROMPT_EL, SEND_BTN, NEW_CTX_BTN, EXPENSES_LIST_EL } = els;
+  const { MESSAGES_EL, PROMPT_EL, SEND_BTN, NEW_CTX_BTN } = els;
+
+  function autoResizePrompt() {
+    if (!PROMPT_EL) return;
+    PROMPT_EL.style.height = '0px';
+    const nextHeight = Math.min(PROMPT_EL.scrollHeight, 180);
+    PROMPT_EL.style.height = `${Math.max(nextHeight, 56)}px`;
+  }
 
   function appendMessage(role, text, extraClass = '') {
     if (!MESSAGES_EL) return;
@@ -69,82 +76,12 @@ function makeClient(els) {
     return false;
   }
 
-  function isCurrentMonth(dateValue) {
-    const date = new Date(dateValue || '');
-    if (Number.isNaN(date.getTime())) return false;
-    const now = new Date();
-    return (
-      date.getUTCFullYear() === now.getUTCFullYear() &&
-      date.getUTCMonth() === now.getUTCMonth()
-    );
-  }
-
-  async function refreshExpenses() {
-    if (!EXPENSES_LIST_EL) return;
-
-    try {
-      const res = await fetch('/api/expenses');
-      if (!res.ok) throw new Error(res.statusText);
-      const expenses = await res.json();
-      const monthly = Array.isArray(expenses) ? expenses.filter((expense) => isCurrentMonth(expense.date)) : [];
-      const grouped = monthly.reduce((acc, expense) => {
-        const key = expense.category || 'Uncategorized';
-        acc[key] = (acc[key] || 0) + Number(expense.amount || 0);
-        return acc;
-      }, {});
-      const rows = Object.entries(grouped).sort((a, b) => Number(b[1]) - Number(a[1]));
-
-      EXPENSES_LIST_EL.innerHTML = '';
-
-      if (rows.length === 0) {
-        const empty = document.createElement('div');
-        empty.className = 'meta';
-        empty.textContent = 'No expenses for this month yet.';
-        EXPENSES_LIST_EL.appendChild(empty);
-        return;
-      }
-
-      const total = monthly.reduce((sum, expense) => sum + Number(expense.amount || 0), 0);
-      const totalItem = document.createElement('div');
-      totalItem.className = 'expense-item';
-      totalItem.innerHTML = `<div><div>Total</div><div class="meta">${monthly.length} expenses</div></div><strong>${formatCurrency(total)}</strong>`;
-      EXPENSES_LIST_EL.appendChild(totalItem);
-
-      rows.forEach(([category, amountCents]) => {
-        const item = document.createElement('div');
-        item.className = 'expense-item';
-
-        const details = document.createElement('div');
-        const title = document.createElement('div');
-        title.textContent = category;
-
-        const meta = document.createElement('div');
-        meta.className = 'meta';
-        meta.textContent = 'Current month';
-
-        details.appendChild(title);
-        details.appendChild(meta);
-
-        const amount = document.createElement('strong');
-        amount.textContent = formatCurrency(amountCents);
-
-        item.appendChild(details);
-        item.appendChild(amount);
-        EXPENSES_LIST_EL.appendChild(item);
-      });
-    } catch (err) {
-      EXPENSES_LIST_EL.innerHTML = '';
-      const error = document.createElement('div');
-      error.className = 'meta';
-      error.textContent = 'Could not load expenses.';
-      EXPENSES_LIST_EL.appendChild(error);
-    }
-  }
-
   function setLoading(state) {
     if (SEND_BTN) SEND_BTN.disabled = state;
     if (PROMPT_EL) PROMPT_EL.disabled = state;
-    if (SEND_BTN) SEND_BTN.textContent = state ? 'Entering…' : 'Enter';
+    if (SEND_BTN) SEND_BTN.innerHTML = state
+      ? '<span class="send-icon" aria-hidden="true">…</span>'
+      : '<span class="send-icon" aria-hidden="true">↑</span>';
   }
 
   async function createContext(title = 'frontend-context') {
@@ -173,6 +110,7 @@ function makeClient(els) {
 
     appendMessage('user', text);
     if (PROMPT_EL) PROMPT_EL.value = '';
+    autoResizePrompt();
     setLoading(true);
 
     try {
@@ -200,10 +138,8 @@ function makeClient(els) {
         if (structuredText) {
           appendMessage('assistant', structuredText, 'data');
         }
-        await refreshExpenses();
       } else if (payload.message && payload.message.role === 'assistant' && payload.message.content) {
         appendMessage('assistant', payload.message.content);
-        await refreshExpenses();
       } else {
         // try to infer assistant text from common fields
         const inferred = payload?.message?.content || payload?.text || payload?.response || null;
@@ -225,6 +161,8 @@ function makeClient(els) {
   // Wire events
   if (SEND_BTN) SEND_BTN.addEventListener('click', sendPrompt);
   if (PROMPT_EL) {
+    autoResizePrompt();
+    PROMPT_EL.addEventListener('input', autoResizePrompt);
     PROMPT_EL.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
@@ -237,7 +175,6 @@ function makeClient(els) {
       await createContext('user-created');
       clearMessages();
       appendMessage('assistant', 'Fresh start. Tell me about an expense, or we can just chat.');
-      await refreshExpenses();
     } catch (err) {
       appendMessage('system', 'I could not start a new chat. ' + String(err));
     }
@@ -248,7 +185,6 @@ function makeClient(els) {
     try {
       await createContext('initial');
       appendMessage('assistant', 'Hi. Tell me what you spent, or ask me anything about your expenses.');
-      await refreshExpenses();
     } catch (err) {
       appendMessage('system', 'I could not start the chat. ' + String(err));
     }
@@ -263,7 +199,6 @@ document.addEventListener('DOMContentLoaded', () => {
     PROMPT_EL: safe(document.getElementById('prompt')),
     SEND_BTN: safe(document.getElementById('send')),
     NEW_CTX_BTN: safe(document.getElementById('new-context')),
-    EXPENSES_LIST_EL: safe(document.getElementById('expenses-list')),
   };
   makeClient(els);
 });

@@ -10,9 +10,10 @@ if (provider === 'gemini' && !process.env.GEMINI_API_KEY && !process.env.GEMINI_
 import { createServer } from './server';
 
 const port = Number(process.env.PORT || 4000);
+const host = process.env.HOST || '0.0.0.0';
 
 const app = createServer();
 
-app.listen(port, () => {
-  console.log(`Expense MVP server listening on http://localhost:${port}`);
+app.listen(port, host, () => {
+  console.log(`Expense MVP server listening on http://${host}:${port}`);
 });
