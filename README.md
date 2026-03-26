@@ -111,85 +111,50 @@ Important behavior:
 - the LLM is told not to ask `list_expenses` for more than 4
 - follow-up delete/update replies like `delete 2` use the previous tool result context
 
-## LLM Providers
+## LLM Setup
 
-The app supports:
-
-- Ollama
-- Gemini
+The app currently uses Gemini for chat and tool orchestration.
 
 Current `.env` example:
 
 ```env
-LLM_PROVIDER=ollama
+LLM_PROVIDER=gemini
 
 GEMINI_API_KEY=your_gemini_key
 GEMINI_MODEL=gemini-2.5-flash
-
-OLLAMA_BASE_URL=http://localhost:11434
-OLLAMA_MODEL=qwen2.5:3b
 
 PORT=4000
 ```
 
 Notes:
 
-- Ollama runs locally at `http://localhost:11434`
 - Gemini is called remotely through Google’s API
 - `src/index.ts` only requires Gemini credentials when `LLM_PROVIDER=gemini`
+- local models can be added later if you want to run the LLM stack on your own machine or private infrastructure
 
 ## Setup
 
-1. Install dependencies
+1. Configure `.env`
+
+2. Start the app with Docker Compose
 
 ```bash
-npm install
-```
-
-2. Configure `.env`
-
-3. If using Ollama, start it
-
-```bash
-ollama serve
-```
-
-4. Pull the model if needed
-
-```bash
-ollama pull qwen2.5:3b
-```
-
-5. Start the app
-
-```bash
-npm run dev
+docker-compose up
 ```
 
 Open:
 
 ```text
-http://localhost:4000
+http://localhost:3000
 ```
+
+The app is Dockerized and stores expense data in the local `data/` folder through a bind mount.
 
 ## Frontend
 
-Frontend files:
+### UI Examples
 
-- `frontend/index.html`
-- `frontend/app.js`
-- `frontend/styles.css`
-
-Current UI behavior:
-
-- press `Enter` to send
-- `Shift+Enter` inserts a newline
-- the composer uses a compact chat-style input with an arrow send button
-- `New Expense Chat` resets the current chat context
-- chat renders structured result blocks for:
-  - `list_expenses`
-  - `monthly_summary`
-- low-quality placeholder replies like blank `1. 2. 3.` lists are suppressed in the UI when real tool results are available
+![Expense MVP UI](expense%20mvp.png)
 
 ## Persistence
 
@@ -230,14 +195,6 @@ The chat response includes:
 - `toolCalls`
 - `toolResults`
 
-## Main Files
-
-- `src/mcp.ts`: conversation loop, tool planning, reply generation, context memory
-- `src/server.ts`: Express routes
-- `src/db.ts`: JSON persistence
-- `src/tools/index.ts`: tool registry
-- `frontend/app.js`: browser client
-
 ## Scripts
 
 ```bash
@@ -259,9 +216,3 @@ Run:
 ```bash
 npm test -- --run
 ```
-
-## Current Limitations
-
-- LLM quality still affects how natural the final replies are
-- Ollama model latency can be much slower than Gemini for multi-step tool flows
-- there is still no dedicated automated test coverage for the full multi-turn conversation planner path in `src/mcp.ts`
