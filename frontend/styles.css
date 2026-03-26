@@ -35,6 +35,8 @@ body {
   min-height: 100vh;
   margin: 0 auto;
   padding: 20px 16px 18px;
+  display: flex;
+  flex-direction: column;
 }
 
 header {
@@ -74,7 +76,8 @@ header {
 }
 
 main {
-  display: block;
+  display: flex;
+  flex: 1;
 }
 
 #chat {
@@ -86,16 +89,16 @@ main {
 }
 
 #chat {
-  min-height: 68vh;
+  min-height: 100%;
   padding: 14px;
   display: flex;
   flex-direction: column;
+  flex: 1;
 }
 
 #messages {
   flex: 1;
   min-height: 300px;
-  max-height: 60vh;
   overflow: auto;
   padding: 4px 2px 8px;
   display: flex;
@@ -184,7 +187,7 @@ main {
 }
 
 #composer textarea::placeholder {
-  color: #7390a8;
+  color: rgba(144, 169, 191, 0.58);
 }
 
 button {
@@ -222,9 +225,9 @@ button:disabled {
 }
 
 #new-context {
-  background: transparent;
-  border: 1px solid var(--line);
-  color: var(--muted);
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: #d5e6f5;
   white-space: nowrap;
   font-size: 0.9rem;
 }
@@ -240,20 +243,9 @@ button:disabled {
   font-size: 0.9rem;
 }
 
-footer {
-  margin-top: 14px;
-  text-align: center;
-  color: var(--muted);
-  font-size: 0.82rem;
-}
-
 @media (max-width: 980px) {
   #app {
     padding-inline: 16px;
-  }
-
-  #chat {
-    min-height: auto;
   }
 
   #messages {
