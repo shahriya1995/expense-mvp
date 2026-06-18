@@ -14,6 +14,11 @@ export const ExpenseSchema = z.object({
   notes: z.string().max(1000, 'notes too long').default('').optional(),
 });
 
+export const ExpensePatchSchema = ExpenseSchema.partial().refine(
+  (value) => Object.keys(value).length > 0,
+  'at least one field is required'
+);
+
 export type ExpenseInput = z.infer<typeof ExpenseSchema>;
 
 /**
@@ -21,4 +26,8 @@ export type ExpenseInput = z.infer<typeof ExpenseSchema>;
  */
 export function validateExpenseInput(data: unknown): ExpenseInput {
   return ExpenseSchema.parse(data);
+}
+
+export function validateExpensePatchInput(data: unknown) {
+  return ExpensePatchSchema.parse(data);
 }

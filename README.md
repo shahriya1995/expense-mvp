@@ -1,199 +1,185 @@
-# Expense MVP
+# Expense MVP API
 
-A chat-first expense tracker built with Node.js, TypeScript, and Express. The app keeps a lightweight conversation context, lets an LLM choose internal tools, stores expenses in a JSON file, and renders both chat replies and structured data results in the UI.
+A lightweight expense-tracking backend built with Node.js, TypeScript, and Express.
 
-## What It Does
+This project is now designed to be the backend service behind Open WebUI:
 
-You type naturally in the chat UI. The assistant can:
+- Open WebUI handles chat
+- Open WebUI handles model selection
+- Open WebUI handles prompts and tools
+- this app handles expense data, validation, and storage
 
-- add an expense
-- update an expense
-- delete an expense
-- list stored expenses
-- summarize the current month
-- ask a short follow-up question when a request is unclear
+## What This Backend Does
 
-Examples:
+- create expenses
+- update expenses
+- delete expenses
+- list expenses with filters
+- summarize monthly spending
 
-- `I spent $12 on lunch`
-- `show me my last 3 expenses`
-- `how much did I spend this month?`
-- `delete office expenses`
-- `update my lunch expense to $15`
+Expenses are stored locally in `data/expenses.json`.
 
 ## Architecture
 
-The app uses an internal MCP-style tool loop:
-
-1. the frontend sends a chat message to `POST /mcp/:contextId/msg`
-2. `src/mcp.ts` sends recent conversation plus any relevant tool context to the LLM
-3. the LLM returns JSON with:
-   - `reply`
-   - `tool_calls`
-4. the server executes those tool calls
-5. the LLM can be called again to produce a final natural-language reply grounded in the tool results
-6. the frontend renders:
-   - the assistant reply
-   - a structured result block for things like expense lists and monthly summaries
-
-### System Diagram
-
 ```mermaid
 flowchart TD
-    U[User Browser]
-    NASIP[NAS IP Address]
-    NAS[Synology NAS]
-    DC[Docker / Container Manager]
-    APP[Expense MVP Container<br/>Node.js + Express]
-    FE[Frontend<br/>frontend/index.html, app.js, styles.css]
-    API[Express Routes<br/>src/server.ts]
-    MCP[MCP / Chat Orchestrator<br/>src/mcp.ts]
-    TOOLS[Tool Layer<br/>src/tools/*]
-    DB[JSON Persistence<br/>src/db.ts]
-    FILE[data/expenses.json]
-    GEM[Google Gemini API]
+    U[User]
+    W[Open WebUI]
+    M[Model in Open WebUI]
+    T[Open WebUI Tools]
+    API[Expense MVP API]
+    DB[data/expenses.json]
 
-    U --> NASIP
-    NASIP --> APP
-    NAS --> DC
-    DC --> APP
-    APP --> FE
-    APP --> API
-    API --> MCP
-    MCP --> TOOLS
-    TOOLS --> DB
-    DB --> FILE
-    MCP --> GEM
+    U --> W
+    W --> M
+    M --> T
+    T --> API
+    API --> DB
 ```
-
-### Architecture Flow
-
-```mermaid
-sequenceDiagram
-    participant User
-    participant Browser
-    participant App as Expense MVP App
-    participant MCP as src/mcp.ts
-    participant Tools as Tool Layer
-    participant DB as data/expenses.json
-    participant Gemini as Gemini API
-
-    User->>Browser: Type message
-    Browser->>App: Open http://NAS_IP:4000
-    Browser->>App: POST /mcp/:contextId/msg
-    App->>MCP: handleConversationTurn(...)
-    MCP->>Gemini: Send prompt
-    Gemini-->>MCP: Reply + tool calls
-    MCP->>Tools: Execute tools
-    Tools->>DB: Read/write expenses.json
-    DB-->>Tools: Return stored data
-    Tools-->>MCP: Tool results
-    MCP->>Gemini: Optional final reply
-    Gemini-->>MCP: Final assistant text
-    MCP-->>App: assistant + toolResults
-    App-->>Browser: JSON response
-    Browser-->>User: Render chat UI
-```
-
-## Tools
-
-Internal tools live in `src/tools/`:
-
-- `src/tools/createExpense.ts`
-- `src/tools/updateExpense.ts`
-- `src/tools/deleteExpense.ts`
-- `src/tools/listExpenses.ts`
-- `src/tools/monthlySummary.ts`
-
-Important behavior:
-
-- `list_expenses` is capped at **4 expenses max**
-- the LLM is told not to ask `list_expenses` for more than 4
-- follow-up delete/update replies like `delete 2` use the previous tool result context
-
-## LLM Setup
-
-The app currently uses Gemini for chat and tool orchestration.
-
-Current `.env` example:
-
-```env
-LLM_PROVIDER=gemini
-
-GEMINI_API_KEY=your_gemini_key
-GEMINI_MODEL=gemini-2.5-flash
-
-PORT=4000
-```
-
-Notes:
-
-- Gemini is called remotely through Google’s API
-- `src/index.ts` only requires Gemini credentials when `LLM_PROVIDER=gemini`
-- local models can be added later if you want to run the LLM stack on your own machine or private infrastructure
 
 ## Setup
 
 1. Configure `.env`
 
-2. Start the app with Docker Compose
+```env
+PORT=4000
+HOST=0.0.0.0
+```
+
+2. Start the app
+
+```bash
+npm install
+npm run dev
+```
+
+Or with Docker Compose:
 
 ```bash
 docker-compose up
 ```
 
-Open:
+The API will be available at `http://localhost:4000`.
+
+## API
+
+### Root
+
+- `GET /`
+
+Returns a small service description and endpoint map.
+
+### Expenses
+
+- `GET /api/expenses`
+- `GET /api/expenses/:id`
+- `POST /api/expenses`
+- `PATCH /api/expenses/:id`
+- `PUT /api/expenses/:id`
+- `DELETE /api/expenses/:id`
+- `GET /api/expenses/summary/monthly`
+
+### Query Parameters for `GET /api/expenses`
+
+- `category`
+- `limit`
+- `month`
+- `year`
+- `date_from`
+- `date_to`
+- `relative_day` as `today` or `yesterday`
+- `days_back`
+
+Example:
 
 ```text
-http://localhost:3000
+GET /api/expenses?category=Food&limit=3
+GET /api/expenses?relative_day=today
+GET /api/expenses?days_back=7
+GET /api/expenses?month=6&year=2026
 ```
 
-The app is Dockerized and stores expense data in the local `data/` folder through a bind mount.
+### Create Expense
 
-## Frontend
+`POST /api/expenses`
 
-### UI Examples
+```json
+{
+  "description": "Lunch",
+  "amount": 12.5,
+  "currency": "USD",
+  "category": "Food",
+  "notes": "team lunch",
+  "date": "2026-06-17T19:30:00.000Z"
+}
+```
 
-![Expense MVP UI](expense%20mvp.png)
+Notes:
+
+- `amount` is in dollars in the API
+- stored values are persisted in cents internally
+
+### Update Expense
+
+`PATCH /api/expenses/:id`
+
+```json
+{
+  "amount": 15,
+  "notes": "updated after tip"
+}
+```
+
+### Monthly Summary
+
+`GET /api/expenses/summary/monthly?month=6&year=2026`
+
+Response shape:
+
+```json
+{
+  "month": 6,
+  "year": 2026,
+  "total": 5200,
+  "count": 2,
+  "byCategory": {
+    "Food": 1200,
+    "Shopping": 4000
+  }
+}
+```
+
+`total` and `byCategory` values are in cents.
+
+## Open WebUI Integration
+
+Use Open WebUI as the AI layer and point its tools at this backend.
+
+Suggested tool split in Open WebUI:
+
+1. `create_expense`
+   Calls `POST /api/expenses`
+2. `list_expenses`
+   Calls `GET /api/expenses`
+3. `update_expense`
+   Calls `PATCH /api/expenses/:id`
+4. `delete_expense`
+   Calls `DELETE /api/expenses/:id`
+5. `monthly_summary`
+   Calls `GET /api/expenses/summary/monthly`
+
+There is no model configuration required in this backend anymore. Choose your model directly inside Open WebUI.
+
+See `docs/openwebui-tools.md` for ready-to-map tool contracts.
 
 ## Persistence
 
-Expenses are stored in:
-
-- `data/expenses.json`
-
-The JSON DB layer is in:
-
-- `src/db.ts`
+The JSON DB layer is in `src/db.ts`.
 
 It:
 
 - creates the file if missing
 - resets the store to `[]` if the file is empty or invalid
-
-## API
-
-Expense REST API:
-
-- `GET /api/expenses`
-- `GET /api/expenses/:id`
-- `POST /api/expenses`
-- `PUT /api/expenses/:id`
-- `DELETE /api/expenses/:id`
-
-Chat endpoints:
-
-- `POST /mcp/context`
-- `POST /mcp/:contextId/msg`
-
-The chat response includes:
-
-- `assistant`
-- `stored`
-- `storeCount`
-- `detectedExpense`
-- `toolCalls`
-- `toolResults`
 
 ## Scripts
 
@@ -201,18 +187,5 @@ The chat response includes:
 npm run dev
 npm run build
 npm start
-npm test
-```
-
-## Tests
-
-Tests currently cover:
-
-- basic DB operations in `tests/expenses.test.ts`
-- tool registry operations in `tests/tools.test.ts`
-
-Run:
-
-```bash
 npm test -- --run
 ```
