@@ -59,6 +59,46 @@ Send only the fields you want to change.
 DELETE /api/expenses/:id
 ```
 
+### `create_reminder`
+
+```text
+POST /api/reminders
+```
+
+Send a small JSON object such as:
+
+```json
+{
+  "text": "pay rent",
+  "remindAt": "2026-06-20T09:00:00Z",
+  "status": "not_complete"
+}
+```
+
+### `list_reminders`
+
+```text
+GET /api/reminders
+```
+
+Optional query params:
+
+- `limit`
+
+### `update_reminder`
+
+```text
+PATCH /api/reminders/:id
+```
+
+Send only the fields you want to change.
+
+### `delete_reminder`
+
+```text
+DELETE /api/reminders/:id
+```
+
 ## Practical Prompt Guidance
 
 Tell the model:
@@ -66,3 +106,6 @@ Tell the model:
 - use `create_expense` when the user wants to save spending
 - use `list_expenses` when it needs to find a previous record
 - use `update_expense` and `delete_expense` only after it knows the target id
+- use `create_reminder` when the user wants to remember something later
+- use `list_reminders` before updating or deleting a reminder if the id is unknown
+- reminder status should be either `complete` or `not_complete`

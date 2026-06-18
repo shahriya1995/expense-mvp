@@ -3,3 +3,9 @@ export interface ExpenseRecord {
   savedAt: string;
   [key: string]: unknown;
 }
+
+export interface ReminderRecord {
+  id: string;
+  savedAt: string;
+  [key: string]: unknown;
+}

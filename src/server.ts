@@ -1,7 +1,8 @@
 import express from 'express';
 import bodyParser from 'body-parser';
 import expenses from './handlers/expenses';
-import { getStorePath } from './db';
+import reminders from './handlers/reminders';
+import { getStorePaths } from './db';
 
 export function createServer() {
   const app = express();
@@ -23,18 +24,29 @@ export function createServer() {
       name: 'expense-mvp-api',
       status: 'ok',
       endpoints: {
-        list: 'GET /api/expenses',
-        raw: 'GET /api/expenses/raw',
-        get: 'GET /api/expenses/:id',
-        create: 'POST /api/expenses',
-        update: 'PATCH /api/expenses/:id',
-        remove: 'DELETE /api/expenses/:id',
+        expenses: {
+          list: 'GET /api/expenses',
+          raw: 'GET /api/expenses/raw',
+          get: 'GET /api/expenses/:id',
+          create: 'POST /api/expenses',
+          update: 'PATCH /api/expenses/:id',
+          remove: 'DELETE /api/expenses/:id',
+        },
+        reminders: {
+          list: 'GET /api/reminders',
+          raw: 'GET /api/reminders/raw',
+          get: 'GET /api/reminders/:id',
+          create: 'POST /api/reminders',
+          update: 'PATCH /api/reminders/:id',
+          remove: 'DELETE /api/reminders/:id',
+        },
       },
-      storage: getStorePath(),
+      storage: getStorePaths(),
     })
   );
 
   app.use('/api/expenses', expenses);
+  app.use('/api/reminders', reminders);
 
   return app;
 }
