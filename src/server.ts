@@ -1,6 +1,7 @@
 import express from 'express';
 import bodyParser from 'body-parser';
 import expenses from './handlers/expenses';
+import { getStorePath } from './db';
 
 export function createServer() {
   const app = express();
@@ -23,12 +24,13 @@ export function createServer() {
       status: 'ok',
       endpoints: {
         list: 'GET /api/expenses',
+        raw: 'GET /api/expenses/raw',
         get: 'GET /api/expenses/:id',
         create: 'POST /api/expenses',
         update: 'PATCH /api/expenses/:id',
         remove: 'DELETE /api/expenses/:id',
-        monthlySummary: 'GET /api/expenses/summary/monthly',
       },
+      storage: getStorePath(),
     })
   );
 

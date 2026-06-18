@@ -1,52 +1,35 @@
-# Open WebUI Tool Mapping
+# Open WebUI Tool Notes
 
-This backend is meant to sit behind Open WebUI. Open WebUI should own:
+This backend is intentionally minimal.
 
-- the model
-- the chat UI
-- the system prompt
-- tool calling
+Open WebUI should decide how to interpret the user request. The backend just stores or returns JSON records.
 
-This API should own:
-
-- expense validation
-- expense storage
-- expense business logic
-
-## Backend Base URL
-
-Use your running API base URL, for example:
+## Base URL
 
 ```text
 http://localhost:4000
 ```
 
-## Suggested Tools
+## Minimal Tool Mapping
 
 ### `create_expense`
-
-Method:
 
 ```text
 POST /api/expenses
 ```
 
-Body:
+Send a small JSON object such as:
 
 ```json
 {
-  "description": "Lunch",
-  "amount": 12.5,
-  "currency": "USD",
+  "description": "lunch",
+  "amount": 12,
   "category": "Food",
-  "notes": "optional",
-  "date": "2026-06-17T19:30:00.000Z"
+  "notes": "optional"
 }
 ```
 
 ### `list_expenses`
-
-Method:
 
 ```text
 GET /api/expenses
@@ -54,26 +37,9 @@ GET /api/expenses
 
 Optional query params:
 
-- `category`
 - `limit`
-- `month`
-- `year`
-- `date_from`
-- `date_to`
-- `relative_day`
-- `days_back`
-
-Examples:
-
-```text
-GET /api/expenses?limit=3
-GET /api/expenses?relative_day=today
-GET /api/expenses?category=Food&days_back=7
-```
 
 ### `get_expense`
-
-Method:
 
 ```text
 GET /api/expenses/:id
@@ -81,64 +47,22 @@ GET /api/expenses/:id
 
 ### `update_expense`
 
-Method:
-
 ```text
 PATCH /api/expenses/:id
 ```
 
-Body:
-
-```json
-{
-  "description": "Lunch with client",
-  "amount": 18,
-  "category": "Meals",
-  "notes": "optional",
-  "date": "2026-06-17T19:30:00.000Z"
-}
-```
+Send only the fields you want to change.
 
 ### `delete_expense`
-
-Method:
 
 ```text
 DELETE /api/expenses/:id
 ```
 
-### `monthly_summary`
+## Practical Prompt Guidance
 
-Method:
+Tell the model:
 
-```text
-GET /api/expenses/summary/monthly
-```
-
-Optional query params:
-
-- `month`
-- `year`
-
-Example:
-
-```text
-GET /api/expenses/summary/monthly?month=6&year=2026
-```
-
-## Prompt Guidance for Open WebUI
-
-Your Open WebUI system prompt should tell the model:
-
-- use `create_expense` when the user clearly wants to add an expense
-- use `list_expenses` for recent expenses, category lookups, or finding a target before update/delete
-- use `monthly_summary` for totals and monthly spending breakdowns
-- if a user wants to update or delete an expense but no `id` is known, call `list_expenses` first
-- ask a short clarification question if amount, description, or target expense is ambiguous
-
-## Important Data Notes
-
-- API `amount` inputs are in dollars
-- stored amounts are kept in cents internally
-- summary totals are returned in cents
-- expense dates should be ISO timestamps
+- use `create_expense` when the user wants to save spending
+- use `list_expenses` when it needs to find a previous record
+- use `update_expense` and `delete_expense` only after it knows the target id

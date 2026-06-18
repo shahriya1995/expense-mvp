@@ -1,94 +1,74 @@
 import { Router } from 'express';
+import { v4 as uuidv4 } from 'uuid';
 import * as db from '../db';
-import {
-  createExpense,
-  deleteExpense,
-  getMonthlySummary,
-  listExpenses,
-  updateExpense,
-} from '../services/expenses';
-import { validateExpenseInput, validateExpensePatchInput } from '../validation';
+import { ExpenseRecord } from '../types';
 
 const router = Router();
 
-function parseOptionalNumber(value: unknown): number | undefined {
+function parseLimit(value: unknown): number | undefined {
   if (typeof value !== 'string' || value.trim() === '') return undefined;
 
   const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : undefined;
+  if (!Number.isFinite(parsed) || parsed <= 0) return undefined;
+
+  return Math.floor(parsed);
+}
+
+function toObject(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  return value as Record<string, unknown>;
 }
 
 router.get('/', async (req, res) => {
-  const expenses = await listExpenses({
-    category: typeof req.query.category === 'string' ? req.query.category : undefined,
-    limit: parseOptionalNumber(req.query.limit),
-    month: parseOptionalNumber(req.query.month),
-    year: parseOptionalNumber(req.query.year),
-    date_from: typeof req.query.date_from === 'string' ? req.query.date_from : undefined,
-    date_to: typeof req.query.date_to === 'string' ? req.query.date_to : undefined,
-    relative_day:
-      req.query.relative_day === 'today' || req.query.relative_day === 'yesterday'
-        ? req.query.relative_day
-        : undefined,
-    days_back: parseOptionalNumber(req.query.days_back),
-  });
+  const limit = parseLimit(req.query.limit);
+  const expenses = await db.getAllExpenses();
+  const recentFirst = [...expenses].reverse();
 
-  res.json(expenses);
+  res.json(limit ? recentFirst.slice(0, limit) : recentFirst);
 });
 
-router.get('/summary/monthly', async (req, res) => {
-  const summary = await getMonthlySummary(
-    parseOptionalNumber(req.query.month),
-    parseOptionalNumber(req.query.year)
-  );
-
-  res.json(summary);
+router.get('/raw', async (_req, res) => {
+  const expenses = await db.getAllExpenses();
+  res.type('text/plain').send(expenses.map((expense) => JSON.stringify(expense)).join('\n'));
 });
 
 router.get('/:id', async (req, res) => {
-  const e = await db.getExpenseById(req.params.id);
-  if (!e) return res.status(404).json({ error: 'not found' });
-  res.json(e);
+  const expense = await db.getExpenseById(req.params.id);
+  if (!expense) return res.status(404).json({ error: 'not found' });
+  res.json(expense);
 });
 
 router.post('/', async (req, res) => {
-  try {
-    const validated = validateExpenseInput(req.body);
-    const created = await createExpense(validated);
-    res.status(201).json(created);
-  } catch (err: any) {
-    const msg = err.errors?.[0]?.message || String(err);
-    res.status(400).json({ error: msg });
+  const payload = toObject(req.body);
+  const created: ExpenseRecord = {
+    ...payload,
+    id: uuidv4(),
+    savedAt: new Date().toISOString(),
+  };
+
+  if (created.date == null) {
+    created.date = created.savedAt;
   }
+
+  const stored = await db.createExpense(created);
+  res.status(201).json(stored);
 });
 
 router.patch('/:id', async (req, res) => {
-  try {
-    const patch = validateExpensePatchInput(req.body);
-    const updated = await updateExpense(req.params.id, patch);
-    if (!updated) return res.status(404).json({ error: 'not found' });
-    res.json(updated);
-  } catch (err: any) {
-    const msg = err.errors?.[0]?.message || String(err);
-    res.status(400).json({ error: msg });
-  }
+  const updated = await db.updateExpense(req.params.id, toObject(req.body));
+  if (!updated) return res.status(404).json({ error: 'not found' });
+  res.json(updated);
 });
 
 router.put('/:id', async (req, res) => {
-  try {
-    const patch = validateExpensePatchInput(req.body);
-    const updated = await updateExpense(req.params.id, patch);
-    if (!updated) return res.status(404).json({ error: 'not found' });
-    res.json(updated);
-  } catch (err: any) {
-    const msg = err.errors?.[0]?.message || String(err);
-    res.status(400).json({ error: msg });
-  }
+  const updated = await db.updateExpense(req.params.id, toObject(req.body));
+  if (!updated) return res.status(404).json({ error: 'not found' });
+  res.json(updated);
 });
 
 router.delete('/:id', async (req, res) => {
-  const ok = await deleteExpense(req.params.id);
-  if (!ok) return res.status(404).json({ error: 'not found' });
+  const deleted = await db.deleteExpense(req.params.id);
+  if (!deleted) return res.status(404).json({ error: 'not found' });
   res.status(204).send();
 });
 

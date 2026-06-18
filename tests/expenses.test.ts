@@ -1,33 +1,27 @@
-import { describe, it, expect } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import * as db from '../src/db';
-import { Expense } from '../src/types';
+import { ExpenseRecord } from '../src/types';
 
-describe('db basic operations', async () => {
-  it('creates, reads, updates, and deletes an expense', async () => {
-    const e: Expense = {
+describe('text store operations', () => {
+  it('creates, reads, updates, and deletes a record', async () => {
+    const record: ExpenseRecord = {
       id: 'test-id-1',
+      savedAt: new Date().toISOString(),
       description: 'Test expense',
-      amount: 1234,
-      currency: 'USD',
-      date: new Date().toISOString(),
+      amount: 12,
       category: 'test',
-      notes: ''
     };
 
-    // create
-    const created = await db.createExpense(e);
-    expect(created.id).toBe(e.id);
+    const created = await db.createExpense(record);
+    expect(created.id).toBe(record.id);
 
-    // read
     const all = await db.getAllExpenses();
-    expect(all.find(x => x.id === e.id)).toBeDefined();
+    expect(all.find((entry) => entry.id === record.id)).toBeDefined();
 
-    // update
-    const updated = await db.updateExpense(e.id, { notes: 'updated' });
-    expect(updated?.notes).toBe('updated');
+    const updated = await db.updateExpense(record.id, { note: 'updated' });
+    expect(updated?.note).toBe('updated');
 
-    // delete
-    const ok = await db.deleteExpense(e.id);
-    expect(ok).toBe(true);
+    const deleted = await db.deleteExpense(record.id);
+    expect(deleted).toBe(true);
   });
 });

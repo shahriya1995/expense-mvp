@@ -1,9 +1,5 @@
-export interface Expense {
+export interface ExpenseRecord {
   id: string;
-  description: string;
-  amount: number; // cents
-  currency?: string;
-  date: string; // ISO
-  category?: string;
-  notes?: string;
+  savedAt: string;
+  [key: string]: unknown;
 }
