@@ -1,10 +1,10 @@
 services:
   app:
     image: node:20-alpine
-    container_name: expense-tracker-ts
+    container_name: expense-mvp-api
     working_dir: /usr/src/app
     ports:
-      - "3000:3000"
+      - "4000:4000"
     env_file:
       - .env
     volumes:
