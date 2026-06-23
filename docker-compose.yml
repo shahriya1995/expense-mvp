@@ -1,17 +1,13 @@
 services:
   app:
-    image: node:20-alpine
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: expense-mvp-api:latest
     container_name: expense-mvp-api
-    working_dir: /usr/src/app
     ports:
       - "4000:4000"
     env_file:
       - .env
     volumes:
-      - .:/usr/src/app
-      - node_modules:/usr/src/app/node_modules
-      - ./data:/usr/src/app/data
-    command: sh -c "npm install && npm run dev"
-
-volumes:
-  node_modules:
+      - ./data:/app/data

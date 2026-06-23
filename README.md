@@ -114,3 +114,23 @@ npm run build
 npm start
 npm test -- --run
 ```
+
+## Docker
+
+Build the image:
+
+```bash
+docker build -t expense-mvp-api .
+```
+
+Run it:
+
+```bash
+docker run --rm -p 4000:4000 --env-file .env -v "$(pwd)/data:/app/data" expense-mvp-api
+```
+
+Or with Compose:
+
+```bash
+docker compose up --build -d
+```
