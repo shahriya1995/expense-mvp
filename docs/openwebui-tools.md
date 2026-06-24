@@ -70,10 +70,16 @@ Send a small JSON object such as:
 ```json
 {
   "text": "pay rent",
-  "remindAt": "2026-06-20T09:00:00Z",
+  "remindDate": "2026-06-20",
+  "remindTime": "09:00",
   "status": "not_complete"
 }
 ```
+
+Prefer `remindDate` plus `remindTime` so the tool can build the final timestamp for the model.
+Optional `remindTimezone` can override the default timezone.
+`remindAt` is still supported, but only use it when you already have an exact timestamp.
+The API normalizes valid values to ISO 8601 before storing them and rejects invalid values.
 
 ### `list_reminders`
 
@@ -107,5 +113,7 @@ Tell the model:
 - use `list_expenses` when it needs to find a previous record
 - use `update_expense` and `delete_expense` only after it knows the target id
 - use `create_reminder` when the user wants to remember something later
+- prefer `remindDate` and `remindTime` over building `remindAt` manually
+- call `get_current_datetime` before resolving relative phrases like `tomorrow`, `next Friday`, or `in two hours`
 - use `list_reminders` before updating or deleting a reminder if the id is unknown
 - reminder status should be either `complete` or `not_complete`

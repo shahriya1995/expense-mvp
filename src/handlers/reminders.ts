@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import * as db from '../db';
 import { ReminderRecord } from '../types';
+import { normalizeReminderDate } from '../utils/reminderDate';
 
 const router = Router();
 
@@ -49,12 +50,22 @@ router.get('/:id', async (req, res) => {
 
 router.post('/', async (req, res) => {
   const payload = toObject(req.body);
+  const normalizedRemindAt = normalizeReminderDate(payload.remindAt);
+
+  if ('remindAt' in payload && payload.remindAt != null && payload.remindAt !== '' && !normalizedRemindAt) {
+    return res.status(400).json({ error: 'invalid remindAt' });
+  }
+
   const created: ReminderRecord = {
     ...payload,
     id: uuidv4(),
     savedAt: new Date().toISOString(),
     status: normalizeStatus(payload.status),
   };
+
+  if (normalizedRemindAt) {
+    created.remindAt = normalizedRemindAt;
+  }
 
   if (created.remindAt == null && created.when == null && created.date == null) {
     created.date = created.savedAt;
@@ -69,6 +80,17 @@ router.patch('/:id', async (req, res) => {
   if ('status' in patch) {
     patch.status = normalizeStatus(patch.status);
   }
+  if ('remindAt' in patch) {
+    if (patch.remindAt == null || patch.remindAt === '') {
+      delete patch.remindAt;
+    } else {
+      const normalizedRemindAt = normalizeReminderDate(patch.remindAt);
+      if (!normalizedRemindAt) {
+        return res.status(400).json({ error: 'invalid remindAt' });
+      }
+      patch.remindAt = normalizedRemindAt;
+    }
+  }
 
   const updated = await db.updateReminder(req.params.id, patch);
   if (!updated) return res.status(404).json({ error: 'not found' });
@@ -79,6 +101,17 @@ router.put('/:id', async (req, res) => {
   const patch = toObject(req.body);
   if ('status' in patch) {
     patch.status = normalizeStatus(patch.status);
+  }
+  if ('remindAt' in patch) {
+    if (patch.remindAt == null || patch.remindAt === '') {
+      delete patch.remindAt;
+    } else {
+      const normalizedRemindAt = normalizeReminderDate(patch.remindAt);
+      if (!normalizedRemindAt) {
+        return res.status(400).json({ error: 'invalid remindAt' });
+      }
+      patch.remindAt = normalizedRemindAt;
+    }
   }
 
   const updated = await db.updateReminder(req.params.id, patch);
