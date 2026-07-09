@@ -1,110 +1,33 @@
-# Expense MVP API
+# Expense MVP MCP Server
 
-A minimal backend for Open WebUI.
+A minimal HTTP MCP expense and reminder server for Open WebUI and other MCP-compatible AI clients.
 
-The idea is simple:
+## Architecture
 
-- Open WebUI and the model decide what an expense means
-- this backend stores whatever structured JSON the tool sends
-- expense and reminder records are saved as plain text lines in `data/expenses.txt` and `data/reminders.txt`
+The project is intentionally simple:
 
-There is very little backend opinion now. The server mostly saves, lists, updates, and deletes records.
+- MCP tools are defined in [src/mcp/server.ts](/Users/riyashah/newProjects/expense-mvp/src/mcp/server.ts)
+- business logic lives in [src/services/expenses.ts](/Users/riyashah/newProjects/expense-mvp/src/services/expenses.ts) and [src/services/reminders.ts](/Users/riyashah/newProjects/expense-mvp/src/services/reminders.ts)
+- records are stored as line-delimited JSON in:
+  - `data/expenses.txt`
+  - `data/reminders.txt`
 
-## Storage
+There is no REST API layer anymore. The MCP server is the primary interface, exposed over HTTP at `/mcp`.
 
-Records are stored in:
+## MCP Tools
 
-- `data/expenses.txt`
-- `data/reminders.txt`
+- `list_expenses`
+- `get_expense`
+- `create_expense`
+- `update_expense`
+- `delete_expense`
+- `list_reminders`
+- `get_reminder`
+- `create_reminder`
+- `update_reminder`
+- `delete_reminder`
 
-Each line is one JSON object.
-
-## API
-
-- `GET /`
-- `GET /api/expenses`
-- `GET /api/expenses/raw`
-- `GET /api/expenses/:id`
-- `POST /api/expenses`
-- `PATCH /api/expenses/:id`
-- `PUT /api/expenses/:id`
-- `DELETE /api/expenses/:id`
-- `GET /api/reminders`
-- `GET /api/reminders/raw`
-- `GET /api/reminders/:id`
-- `POST /api/reminders`
-- `PATCH /api/reminders/:id`
-- `PUT /api/reminders/:id`
-- `DELETE /api/reminders/:id`
-
-### Create
-
-Send any JSON object you want to store.
-
-Example:
-
-```json
-{
-  "description": "lunch",
-  "amount": 12,
-  "category": "Food",
-  "notes": "client meeting"
-}
-```
-
-The backend adds:
-
-- `id`
-- `savedAt`
-- `date` if you did not send one
-
-### List
-
-`GET /api/expenses`
-
-Optional:
-
-- `limit`
-
-### Raw
-
-`GET /api/expenses/raw`
-
-Returns the text file view directly.
-
-### Reminders
-
-Send any JSON object you want to store as a reminder.
-
-Example:
-
-```json
-{
-  "text": "pay rent",
-  "remindAt": "2026-06-20T09:00:00Z",
-  "status": "not_complete"
-}
-```
-
-The backend adds:
-
-- `id`
-- `savedAt`
-- `status` as `not_complete` unless you set it to `complete`
-
-## Open WebUI
-
-Keep the tool interface lightweight. Let the model decide:
-
-- description
-- amount
-- category
-- notes
-- reminder text
-- reminder time
-- reminder status as `complete` or `not_complete`
-
-The backend just stores the resulting JSON.
+Reminder inputs support `remindAt` as a parseable datetime string. Valid values are normalized to ISO 8601 before storage.
 
 ## Scripts
 
@@ -112,25 +35,65 @@ The backend just stores the resulting JSON.
 npm run dev
 npm run build
 npm start
-npm test -- --run
+npx vitest run
 ```
+
+## MCP Client Setup
+
+Start the server:
+
+```bash
+npm run build
+npm start
+```
+
+By default it serves:
+
+```text
+http://localhost:4000/mcp
+```
+
+Health check:
+
+```text
+http://localhost:4000/health
+```
+
+Example Open WebUI-style MCP URL target:
+
+```text
+http://localhost:4000/mcp
+```
+
+## Testing
+
+Quick verification flow:
+
+```bash
+npm run build
+npx vitest run
+npm start
+```
+
+Then connect an MCP client to `http://localhost:4000/mcp` and try:
+
+1. `create_expense`
+2. `list_expenses`
+3. `create_reminder`
+4. `list_reminders`
+5. `update_reminder`
+6. `delete_reminder`
 
 ## Docker
 
-Build the image:
+Build the MCP image:
 
 ```bash
-docker build -t expense-mvp-api .
+docker build -t expense-mvp-mcp .
 ```
 
 Run it:
 
 ```bash
-docker run --rm -p 4000:4000 --env-file .env -v "$(pwd)/data:/app/data" expense-mvp-api
-```
-
-Or with Compose:
-
-```bash
-docker compose up --build -d
+docker compose up --build
 ```

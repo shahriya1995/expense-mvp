@@ -3,8 +3,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: expense-mvp-api:latest
-    container_name: expense-mvp-api
+    image: expense-mvp-mcp:latest
+    container_name: expense-mvp-mcp
     ports:
       - "4000:4000"
     env_file:
